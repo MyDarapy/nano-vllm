@@ -10,6 +10,8 @@ class ModelConfig:
     intermidate_size : int
     num_hidden_layers : int 
     num_attention_heads : int 
+    head_dim : int
+    num_kv_heads : int
 
 
     @classmethod

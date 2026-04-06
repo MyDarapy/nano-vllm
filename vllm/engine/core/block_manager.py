@@ -1,3 +1,9 @@
+"""Block manager for pagedattention. 
+
+Manages physical KV blocks allocation and deallocation per sequence  
+
+Manages prefix caching """
+
 from vllm.engine.core.block import Block, BLOCK_SIZE, BlockTable, compute_blocks, hash_token_block
 
 
@@ -14,6 +20,8 @@ class BlockManager:
             self.blocks = [Block(block_id=i, block_size=self.block_size)]
 
         self.prefix_cache = {}
+        self._block_to_cache_key = {}
+
         
     def allocate_block(self):
         if not self.free_blocks:
@@ -105,6 +113,61 @@ class BlockManager:
 
                 #update the parent block for the next hash 
                 parent_hash = cached_block.prefix_hash
+
+            else:
+                if not self.can_allocate(1):
+                    raise RuntimeError("Out of free KV cache blocks")
+                
+                block_id = self.allocate_block()
+                block = self.block[block_id]       
+                block.prefix_hash = hash_token_block(block_tokens, parent_hash)
+                block.is_full = True
+
+                # add prefix tokens to cache 
+                self.prefix_cache[cache_key] = block_id
+
+                # reserve mapping for easily O(n) removal 
+                self._block_to_cache_key[block_id] = cache_key
+
+                block_table.append_block(block_id)
+                parent_hash = block.prefix_hash
+
+            # allocate remaining partial blocks
+            if num_tokens_in_seq % self.block_size > 0:
+                if not self.allocate_block(1):
+                    raise RuntimeError("Cannot allocate new KV cache bloch. Out of free blocks to allocate")
+                block_id = self.allocate_block()
+                block_table.append_block(block_id)
+
+        return block_table, shared_prefix_len
+    
+
+    def mark_block_full(self, block_id, token_ids, parent_hash):
+        if len(token_ids) != self.block_size:
+            raise ValueError(f"Block must have {self.block_size} tokens") 
+        
+        if not self.enable_prefix_caching:
+            return 0
+        
+
+    def free_all_blocks(self, block_table):
+        for block_id in block_table.block_ids:
+            self.free_blocks(block_id)
+            block_table.ids.clear()
+
+    def get_prefix_cache_stat(self):
+        num_cached_blocks = len(self.prefix_cache)
+        for block_id in self.prefix_cache.values:
+            total_ref = sum(self.blocks[block_id].ref_count)
+
+        return {"numbr_of_cached_blocks": num_cached_blocks,
+                "total_reference" : total_ref,
+                "avg_reference_per_block" : total_ref / num_cached_blocks if num_cached_blocks > 0 else 0 
+        }
+    
+                
+
+
 
 
 

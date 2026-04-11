@@ -131,7 +131,7 @@ class Scheduler:
         """If highest waiting can't get new blocks, we need to preempt lowest priority"""
         blocks_for_waiting = compute_blocks(highest_waiting.get_prompt_len(), self.block_size)
 
-        while not self.block_mannager.can_allocate(blocks_for_waiting) and self.running:
+        while not self.block_mannager.can_allocate(blocks_for_waiting) and self.running:  #while block only runs if both conditions are true
             lowest_running = min(self.running, key=lambda s: (s.priority, -s.arrival_time))
 
             """Only preempt if waiting has higher priority"""
@@ -143,14 +143,113 @@ class Scheduler:
             
             # free blocks
             if lowest_running.block_table is not None:
-                self.block_manager.free_sequence_
+                self.block_manager.free_sequence_blocks(lowest_running.block_table)
+            lowest_running.reset_for_recompute
 
-
-    def update_seuence(self, ):
-        pass
-    
+            self._push_waiting(lowest_running)
     
     def schedule(self):
-        outputs = 
-        
+        outputs = SchedulerOutputs()
+
+        if self.enable_preeemption and self.block_manager is not None:
+            self._handle_preemption(outputs)
+
+        prefill_budget = self.max_prefill_tokens
+
+        for seq in self.running:
+            if seq.is_chunked_prefill():
+                remaining = self.get_remaining_prefill_tokens()
+                tokens_to_process = min(prefill_budget, remaining)
+                if tokens_to_process > 0:
+                    outputs.chunked_prefill_sequences.append(seq)
+                    outputs.chunked_prefill_tokens.append(tokens_to_process)
+                    prefill_budget -=tokens_to_process
+
+                else:
+                    outputs.decode_sequence.append(seq)
+
+        # remaining batch capacity 
+        remaining_slots = self.max_batch_size - len(outputs.decode_sequences) - len(outputs.chunked_prefill_sequences)
+
+        # add waiting squences 
+        num_added = 0 
+        while num_added < remaining_slots and self._waiting_heap and prefill_budget > 0:
+            seq = self._peek_waiting
+            if seq is None:
+                break 
+
+            if self.block_manager is not None:
+                full_prompt_len = seq.get_prompt_len()
+                blocks_needed = compute_blocks(full_prompt_len, self.block_size)
+                if not self.block_manager.can_allocate(blocks_needed):
+                    # Not enough blocks for full prompt, stop admitting new sequences
+                    break
+
+            self._pop_waiting()
+            seq.status = SequenceStatus.RUNNING
+            self.running.append(seq)
+
+            # check if it is a full prefill or a chunked prefill
+            prompt_len = seq.get_prompt_len()
+            if prompt_len <= prefill_budget:
+                # Full prefill 
+                outputs.prefill_sequences.append(seq)
+                prefill_budget -=prompt_len
+
+            else:
+                tokens_to_process = prefill_budget
+                outputs.chunked_prefill_sequences.append(seq)
+                outputs.chunked_prefill_tokens.append(tokens_to_process)
+                prefill_budget = 0 
+
+            num_added += 1
+
+        return outputs
+    
+
+    def update_sequences(self, eos_token_id):
+        """"Update sequence status after a generation step"""
+
+        newly_finished = []
+
+        still_running = []
+        for seq in self.running:
+            if seq.is_finished(eos_token_id):
+                seq.status = SequenceStatus.FINISHED
+                self.finished.append(seq)
+                newly_finished.append(seq)
+            else:
+                still_running.append(seq)
+            
+        self.running = still_running
+        return newly_finished
+    
+    def has_pending_requests(self):
+        """ckeck if there are requests still being processed"""
+        return len(self._waiting_heap) > 0 or len(self.running) > 0
+    
+    def get_num_waiting(self):
+        return len(self._waiting_heap)
+    
+    def get_num_running(self):
+        return len(self.running)
+    
+    def get_num_finished(self):
+        return len(self.finished)
+    
+    def get_highest_priority_waiting(self):
+        return self._peek_waiting()
+    
+    def get_lowest_priority_running(self):
+        if not self.running:
+            return None
+        return min(self.running, key= lambda s: (s.priority, -s.arrival_time))
+
+    def __repr__(self):
+        return(
+            f"Scheduler(policy={self.scheduling_policy.value}, )"
+            f"waiting={self.get_num_waiting()}, "
+            f"running={self.get_num_running()}, "
+            f"finished={self.get_num_finished()}"
+        )
         

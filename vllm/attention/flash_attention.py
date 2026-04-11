@@ -90,7 +90,7 @@ def fwd_flash_attn_kernel(q_ptr, k_ptr, v_ptr, o_ptr, m_ptr, scale,
                           kb_stride, kh_stride, kn_stride, kd_stride,
                           vb_stride, vh_stride, vn_stride, vd_stride,
                           ob_stride, oh_stride, on_stride, od_stride,
-                          BATCH_SIZE, NUM_HEADS:tl.constexpr, SEQ_LEN:tl.constexpr, HEAD_DIM:tl.constexpr, 
+                          BATCH_SIZE, NUM_HEADS:tl.constexpr, NUM_KV_HEADS:tl.constexpr, SEQ_LEN:tl.constexpr, HEAD_DIM:tl.constexpr, 
                           BLOCK_SIZE_Q:tl.constexpr, BLOCK_SIZE_KV:tl.constexpr, STAGE:tl.constexpr):
     
     
@@ -104,11 +104,15 @@ def fwd_flash_attn_kernel(q_ptr, k_ptr, v_ptr, o_ptr, m_ptr, scale,
     # get exact head 
     index_head = index_batch_head % NUM_HEADS
 
+    # GQA FIX
+    queries_per_kv_head = NUM_HEADS // NUM_KV_HEADS
+    index_kv_head = index_head // queries_per_kv_head
+
     # create offsets to get the index of sequences we are going to process
     qkv_offset = index_batch * qb_stride + index_head * qh_stride # i.e move from the first to the correct batch then move to the correct head within that batch 
-    qkv_offset_K = index_batch * kb_stride + index_head * kh_stride
-    qkv_offset_V = index_batch * vb_stride + index_head * vh_stride
-    qkv_offset_O = index_batch * ob_stride + index_head * oh_stride
+    qkv_offset_K = index_batch * kb_stride + index_kv_head * kh_stride
+    qkv_offset_V = index_batch * vb_stride + index_kv_head * vh_stride
+    qkv_offset_O = index_batch * ob_stride + index_kv_head * oh_stride
 
     off_q = block_index_q * BLOCK_SIZE_Q + tl.arange(0, BLOCK_SIZE_Q) # same as off_q (in this head what q block do we need to read )
     off_kv = tl.arange(0, BLOCK_SIZE_KV)
@@ -199,11 +203,11 @@ class TritonFlashAttention(torch.autograd.Function):
         assert K.is_cuda
         assert V.is_cuda
 
-        B, H, Lq, D = Q.shape
-        B, H, Lk, D = K.shape
-        B, H, Lk, D = V.shape
+        B, Hq, Lq, D = Q.shape
+        B, Hk, Lk, D = K.shape
+        B, Hk, Lk, D = V.shape
 
-    
+        
         # create the output buffer
         O = torch.empty_like(Q)
 
@@ -215,8 +219,8 @@ class TritonFlashAttention(torch.autograd.Function):
         stage = 3 if causal else 1
 
         grid = lambda x: (triton.cdiv(Lq, x["BLOCK_SIZE_Q"]),
-                          B * H, 1)
-        M = torch.empty((B, H, Lq), device=Q.device, dtype=torch.float32)
+                          B * Hq, 1)
+        M = torch.empty((B, Hq, Lq), device=Q.device, dtype=torch.float32)
 
         scaling_factor = 1 / math.sqrt(D)
         fwd_flash_attn_kernel[grid](Q, K, V, O, M, scaling_factor,
@@ -224,24 +228,24 @@ class TritonFlashAttention(torch.autograd.Function):
                                     K.stride(0), K.stride(1), K.stride(2), K.stride(3),
                                     V.stride(0), V.stride(1), V.stride(2), V.stride(3),
                                     O.stride(0), O.stride(1), O.stride(2), O.stride(3),
-                                    B, NUM_HEADS=H, SEQ_LEN=Lq, HEAD_DIM=D, STAGE=stage,)
+                                    B, NUM_HEADS=Hq, NUM_KV_HEADS=Hk, SEQ_LEN=Lq, HEAD_DIM=D,STAGE=stage,)
         #ctx.save_for_backward
     
         return O
 
 
-def testing(BATCH_SIZE, NUM_HEADS, SEQ_LEN, HEAD_DIM, causal, dtype=torch.float16):
+def testing(BATCH_SIZE, NUM_HEADS, NUM_KV_HEADS, SEQ_LEN, HEAD_DIM, causal, dtype=torch.float16):
     Q = (
         torch.empty(
             (BATCH_SIZE, NUM_HEADS, SEQ_LEN, HEAD_DIM), dtype=dtype, device="cuda").normal_(mean=0.0, std=0.5).requires_grad_())
     
     K = (
         torch.empty(
-            (BATCH_SIZE, NUM_HEADS, SEQ_LEN, HEAD_DIM), dtype=dtype, device="cuda").normal_(mean=0.0, std=0.5).requires_grad_())
+            (BATCH_SIZE, NUM_KV_HEADS, SEQ_LEN, HEAD_DIM), dtype=dtype, device="cuda").normal_(mean=0.0, std=0.5).requires_grad_())
     
     V = (
         torch.empty(
-            (BATCH_SIZE, NUM_HEADS, SEQ_LEN, HEAD_DIM), dtype=dtype, device="cuda").normal_(mean=0.0, std=0.5).requires_grad_())
+            (BATCH_SIZE, NUM_KV_HEADS, SEQ_LEN, HEAD_DIM), dtype=dtype, device="cuda").normal_(mean=0.0, std=0.5).requires_grad_())
     
     # standard attention 
     softmax_scale = 1/(HEAD_DIM ** 0.5)
@@ -261,7 +265,7 @@ def testing(BATCH_SIZE, NUM_HEADS, SEQ_LEN, HEAD_DIM, causal, dtype=torch.float1
     assert torch.allclose(reference_O, tri_out, atol=atol, rtol=rtol)
 
 if __name__ == "__main__":
-    testing(BATCH_SIZE=8, NUM_HEADS=16, SEQ_LEN=512, HEAD_DIM=64, causal=True)
+    testing(BATCH_SIZE=8, NUM_HEADS=16, NUM_KV_HEADS=4, SEQ_LEN=512, HEAD_DIM=64, causal=True)
     print("causal worked!")
-    testing(BATCH_SIZE=8, NUM_HEADS=16, SEQ_LEN=512, HEAD_DIM=64, causal=False)
+    testing(BATCH_SIZE=8, NUM_HEADS=16, NUM_KV_HEADS=4, SEQ_LEN=512, HEAD_DIM=64, causal=False)
     print("Success! non causal worked")

@@ -56,7 +56,7 @@ class Sequence:
             return self.output_token_ids[-1]
         return self.prompt_token_ids[-1]
     
-    def append_token(self, token_id)
+    def append_token(self, token_id):
         """"Append a generated token to the output"""
         self.output_token_ids.append(token_id)
 

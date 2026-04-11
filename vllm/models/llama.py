@@ -34,7 +34,7 @@ class LlamaAttention(nn.Module):
         self.num_heads = config.num_attention_heads 
         self.head_dim = config.head_dim
         self.num_kv_heads = config.num_kv_heads
-        self.num_kv_groups = self.num_heads // self.num_kv_heads # how many query head share a KV head 
+        self.num_kv_groups = self.num_heads // self.num_kv_heads # how many query head share a KV head (num_queries_per_kv)
 
         self.q_proj = nn.Linear(self.hidden_size, self.num_heads*self.head_dim, bias = False)
         self.k_proj = nn.Linear(self.hidden_size, self.num_kv_heads*self.head_dim, bias = False)
@@ -56,8 +56,6 @@ class LlamaAttention(nn.Module):
 
         # apply rope
         
-
-
 
 
 
@@ -84,3 +82,7 @@ class LlamaDecoder():
     def __init__(self, ):
         super().__init__()
         self.mlp = LlamaMLP()
+
+
+class LlamaForCausalLM(nn.Module):
+    pass

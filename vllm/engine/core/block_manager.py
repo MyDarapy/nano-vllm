@@ -8,7 +8,7 @@ from vllm.engine.core.block import Block, BLOCK_SIZE, BlockTable, compute_blocks
 
 
 class BlockManager:
-    def __init__(self, BLOCK_SIZE, num_blocks, enable_prefix_caching=True):
+    def __init__(self, block_size, num_blocks, enable_prefix_caching=True):
         self.num_blocks = num_blocks
         self.block_size = BLOCK_SIZE
         self.enable_prefix_caching = enable_prefix_caching
@@ -150,7 +150,7 @@ class BlockManager:
             return 0
         
 
-    def free_all_blocks(self, block_table):
+    def free_sequence_blocks(self, block_table):
         for block_id in block_table.block_ids:
             self.free_blocks(block_id)
             block_table.ids.clear()

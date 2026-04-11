@@ -116,7 +116,6 @@ class BlockKCache():
                 device, dtype):
         
         self.block_size = block_size
-        self.block_size = BLOCK_SIZE
         self.num_layers = num_layers
         self.num_kv_heads = num_kv_heads
         self.head_dim = head_dim
@@ -129,14 +128,14 @@ class BlockKCache():
             device=device,
             dtype=dtype)
         
-        self.value = torch.zeros(
+        self.value_cache = torch.zeros(
             (num_layers, num_blocks, block_size, num_kv_heads, head_dim),
             device=device,
             dtype=dtype)
         
         def get_layer_caches(self, layer_id):
             "Get K nd V cache for a particular layer"
-            return self.key_cache[layer_id], self.value[layer_id]
+            return self.key_cache[layer_id], self.value_cache[layer_id]
         
         @property
         def memory_usage_mb(self):

@@ -234,6 +234,14 @@ class TritonFlashAttention(torch.autograd.Function):
         return O
 
 
+
+
+class DecodeFlashAttention(Q, K, V, causal):
+    pass
+
+
+
+
 def testing(BATCH_SIZE, NUM_HEADS, NUM_KV_HEADS, SEQ_LEN, HEAD_DIM, causal, dtype=torch.float16):
     Q = (
         torch.empty(

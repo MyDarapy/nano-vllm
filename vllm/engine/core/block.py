@@ -33,7 +33,8 @@ class Block:
 
 @dataclass
 class BlockTable:
-    block_ids = field(default_factory=list) # physical block ids?
+    # The index of this list represents the logical block index, the value represent the physical block
+    block_ids = field(default_factory=list) 
     block_size = BLOCK_SIZE
 
     def get_block_id(self, logical_block_index):
@@ -71,7 +72,9 @@ class BlockTable:
         return self.block_id.copy()
     
     def slot_mapping(self, seq_len):
-        "slot_mapping[i] produces physical indices for exact posiitons where tokens KV are stored in physical block "
+        "slot_mapping[i] produces slot indices for exact posiitons where tokens KV are stored in global cache"
+        "This is the logical step. The physical step then happens on the GPU to get the actual "
+        "memory address where the slot is located w.r.t the whole cache "
         slots = []
         for pos in range(seq_len):
             logical_block = pos // self.block_size

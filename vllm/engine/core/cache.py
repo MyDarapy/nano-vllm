@@ -79,38 +79,38 @@ class KVCache:
         "Return sequence length memory usage in MB"
         return self.cache.element_size() * self.cache.numel() / (1024 * 1024)
 
-def gather_kv_cache(caches, layer_idx):
-    """Gather the KV states from multiple sequence cache for batched attention"""
-    if not caches:
-        raise ValueError("No cache provided")
+    def gather_kv_cache(caches, layer_idx):
+        """Gather the KV states from multiple sequence cache for batched attention"""
+        if not caches:
+            raise ValueError("No cache provided")
     
-    batch_size = len(caches)
-    max_len = max(cache.seq_len for cache in caches)
+        batch_size = len(caches)
+        max_len = max(cache.seq_len for cache in caches)
 
-    first = caches[0]
-    num_kv_heads = first.num_kv_heads
-    head_dim = first.head_dim
-    device = first.device
-    dtype = first.dtype
+        first = caches[0]
+        num_kv_heads = first.num_kv_heads
+        head_dim = first.head_dim
+        device = first.device
+        dtype = first.dtype
 
 
-    keys = torch.zeros((batch_size, num_kv_heads, max_len, head_dim), 
+        keys = torch.zeros((batch_size, num_kv_heads, max_len, head_dim), 
                       device=device,
                       dtype=dtype)
     
 
-    values = torch.zeros((batch_size, num_kv_heads, max_len, head_dim), 
+        values = torch.zeros((batch_size, num_kv_heads, max_len, head_dim), 
                       device=device,
                       dtype=dtype)
     
-    for i, cache in enumerate(caches):
-        seq_len = cache.seq_len
-        keys[i, :, :seq_len, :] = cache.cache[layer_idx, 0, :, :seq_len, :]
-        values[i, :, :seq_len, :] = cache.cache[layer_idx, 1, :, :seq_len, :]
+        for i, cache in enumerate(caches):
+            seq_len = cache.seq_len
+            keys[i, :, :seq_len, :] = cache.cache[layer_idx, 0, :, :seq_len, :]
+            values[i, :, :seq_len, :] = cache.cache[layer_idx, 1, :, :seq_len, :]
 
 class BlockKCache():
-    """A single pool of block. Sequences references this via their block tablee"""
-    def _init__(self, num_blocks, 
+    """A single pool of block. Sequences references this via their block table"""
+    def __init__(self, num_blocks, 
                 num_layers, block_size, 
                 num_kv_heads, head_dim, 
                 device, dtype):
@@ -133,41 +133,38 @@ class BlockKCache():
             device=device,
             dtype=dtype)
         
-        def get_layer_caches(self, layer_id):
-            "Get K nd V cache for a particular layer"
-            return self.key_cache[layer_id], self.value_cache[layer_id]
+    def get_layer_caches(self, layer_id):
+        "Get K nd V cache for a particular layer"
+        return self.key_cache[layer_id], self.value_cache[layer_id]
         
-        @property
-        def memory_usage_mb(self):
-            key_bytes = self.key_cache.element_size()*self.key_cache.numel()
-            value_bytes = self.value_cache.element_size() * self.value_cache.numel()
-            return (key_bytes + value_bytes) / (1024, 1024)
+    @property
+    def memory_usage_mb(self):
+        key_bytes = self.key_cache.element_size()*self.key_cache.numel()
+        value_bytes = self.value_cache.element_size() * self.value_cache.numel()
+        return (key_bytes + value_bytes) / (1024 * 1024)
         
 
-        @classmethod
-        def from_config(
-            cls, config,
-            num_blocks, 
-            block_size=BLOCK_SIZE,
-            device = "cuda",
-            dtype = torch.float16
-        ):
+    @classmethod
+    def from_config(
+        cls, config,
+        num_blocks, 
+        block_size=BLOCK_SIZE,
+        device = "cuda",
+        dtype = torch.float16):
             
-            "create/initalize a BlockKVCache from model config"
+        "create/initalize a BlockKVCache from model config"
 
-            return cls(num_blocks=num_blocks,
-                       num_layers=config.num_hidden_layers,
-                       block_size=block_size,
-                       num_kv_heads=config.num_kv_heads,
-                       head_dim = config.head_dim,
-                       device=device,
-                       dtype = dtype
-            )
+        return cls(num_blocks=num_blocks,
+                   num_layers=config.num_hidden_layers,
+                    block_size=block_size,
+                    num_kv_heads=config.num_kv_heads,
+                    head_dim = config.head_dim,
+                    device=device,
+                    dtype = dtype)
         
-        def __repr__(self):
-            return(
-                f"BlockKVCache(blocks={self.num_blocks}, "
-                f"layers={self.num_layers},"
-                f"block_size={self.block_size}, "
-                f"memory={self.memeory_usage_mb: .1f}MB)"
-            )
+    def __repr__(self):
+        return(
+            f"BlockKVCache(blocks={self.num_blocks}, "
+            f"layers={self.num_layers},"
+            f"block_size={self.block_size}, "
+            f"memory={self.memeory_usage_mb: .1f}MB)")

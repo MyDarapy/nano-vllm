@@ -40,7 +40,7 @@ class SchedulerOutputs:
     
     @property
     def total_sequnces(self):
-        return self.num_prefill + self.num_decode = self.num_chunked_prefill
+        return self.num_prefill + self.num_decode + self.num_chunked_prefill
 
 
     def is_empty(self):

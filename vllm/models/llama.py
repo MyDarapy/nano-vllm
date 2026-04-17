@@ -121,6 +121,9 @@ class LlamaAttention(nn.Module):
         q, k = apply_rotary_pos_emb(q, k)
         k_for_cache = k.view(-1, self.num_kv_heads, self.head_dim)
         v_for_cache = v.view(-1, self.num_kv_heads, self.head_dim)
+        
+        assert metadata.slot_mapping is not None, "slot mapping needed for KV scatter"
+        
         store_kvcache(self.layer_idx, 
                       k_for_cache,
                       v_for_cache, 
@@ -128,6 +131,10 @@ class LlamaAttention(nn.Module):
                       metadata.slot_mapping)
         
         if metadata.is_prefill:
+            #q = q.permute(0, 2, 1, 3).contiguous()
+            #k = k.permute(0, 2, 1, 3).contiguous()
+            #v = v.permute(0, 2, 1, 3).contiguous()
+
             attn_output = self.flash_attention(q, k, v, causal=True)
         else:
             q_step = q.squeeze(1)

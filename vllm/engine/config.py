@@ -1,7 +1,7 @@
 import os 
 from dataclasses import dataclass
 from transformers import AutoConfig
-
+import torch
 @dataclass
 class ModelConfig:
     model_path : str 
@@ -35,3 +35,12 @@ class ModelConfig:
             rope_theta=getattr(hf_config, "rope_theta", 10000.0),
         )
 
+
+@dataclass
+class Metadata:
+    is_prefill : bool
+    block_tables: torch.Tensor
+    context_lens : torch.Tensor
+    slot_mapping : torch.Tensor
+    positions: torch.Tensor
+    num_sequences = None

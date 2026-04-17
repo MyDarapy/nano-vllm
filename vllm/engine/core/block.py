@@ -58,7 +58,7 @@ class BlockTable:
                 f"Allocated blocks {self.block_ids}"
 
             )
-        return self.block_ids[logical_block_index]
+        return self.block_ids[logical_block_index] #return the id of the block where the token chunk lives on the physical block 
     
     def append_block(self, block_id):
         "Add newly allocated block when new tokens becomes available to the sequence"
@@ -83,9 +83,19 @@ class BlockTable:
             global_slot = physical_block  * self.block_size + slot_in_block
             slots.append(global_slot)
         return slots
+    
+    def slot_mapping_range(self, start_pos, end_pos):
+        slots = []
+        for pos in range(start_pos, end_pos):
+            logical_block = pos // self.block_size
+            slot_in_block = pos % self.block_size
+            physical_block = self.block_ids[logical_block]
+            global_slot = physical_block * self.block_size + slot_in_block
+            slots.append(global_slot)
+        return slots
 
 def compute_blocks(seq_len, block_size=BLOCK_SIZE):
+    """Calculates the amount of blocks a given sequence will need"""
     total_blocks = math.ceil(seq_len / block_size)
     return total_blocks
-
 

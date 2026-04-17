@@ -92,7 +92,7 @@ class BlockManager:
         parent_hash = None
 
         num_tokens_in_seq = len(token_ids)
-        num_blocks_for_seq = num_tokens_in_seq // self.block_size
+        num_blocks_for_seq = num_tokens_in_seq // self.block_size # why not use compute blocks function?
 
         for block_idx in range(num_blocks_for_seq):
             start = block_idx * self.block_size
@@ -160,7 +160,7 @@ class BlockManager:
         for block_id in self.prefix_cache.values:
             total_ref = sum(self.blocks[block_id].ref_count)
 
-        return {"numbr_of_cached_blocks": num_cached_blocks,
+        return {"number_of_cached_blocks": num_cached_blocks,
                 "total_reference" : total_ref,
                 "avg_reference_per_block" : total_ref / num_cached_blocks if num_cached_blocks > 0 else 0 
         }

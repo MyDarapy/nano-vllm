@@ -35,7 +35,7 @@ class Sequence:
     num_prefilled_tokens = 0 
 
     # number of tokens using shared blocks
-    shared_prefix = 0 
+    shared_prefix_len= 0 
 
     def get_len(self):
         """Get the total len of the sequence both prompt tokens and the generated tokens"""
@@ -92,7 +92,7 @@ class Sequence:
         return compute_blocks(self.get_len(), block_size)
     
 
-    def get_mun_new_blocks_needed(self, block_size):
+    def get_num_new_blocks_needed(self, block_size):
         blocks_needed = self.get_num_blocks_needed(block_size)
         blocks_allocated = self.block_table.num_blocks() if self.block_table else 0
         return max(0, blocks_needed-blocks_allocated)

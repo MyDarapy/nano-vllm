@@ -3,7 +3,7 @@ from transformers import AutoTokenizer
 from dataclasses import dataclass
 
 
-from vllm.engine.config import ModelConfig, Metadata
+from vllm.config import ModelConfig, Metadata
 from vllm.models.llama import LlamaForCausalLM
 from vllm.loader import load_models
 from vllm.engine.core.cache import KVCache, BlockKCache
@@ -138,23 +138,42 @@ class LLMEngine:
             return []
         
         completed_outputs = []
+        # process chunked prefill sequences 
         # TODO: this can definitely be paralized with batching to take advantage of the GPUs compute unit 
         for i, seq in enumerate(scheduler_outputs.chunked_prefill_sequences):
             num_tokens = scheduler_outputs.chunked_prefill_tokens[i]
             self._run_chunked_prefill_paged(seq, num_tokens)
-
+        
+        # process full sequence one at a time for simplicity
         # TODO: parallelize prefill across a batch. currently highly inefficient with the for loop
         for seq in scheduler_outputs.prefill_sequences:
             self._run_prefill(seq) # (runs batch_size amount of forward pass(inefficient, parallelize later))
+
+        # proces batched decode sequences
+        if scheduler_outputs.decode_sequences:
+            self.run_decode(scheduler_outputs.decode_sequences)
+        
+        # Chck for finished sequence 
+        newly_finished = self.scheduler.update_sequences(self.tokenizer.eos_token_id)
+
+        """if not newly_finished:
+            return """ 
+        for seq in newly_finished:
+            output = self._create_output(seq)
+            completed_outputs.append(output) # Each item in completed_output is a GenerationOutput object
+
+            #Free blocks for new sequences
+            if self.use_paged_attention and seq.block_table is not None:
+                self.block_manager.free_sequence_blocks(seq.block_table)
+                seq.block_table = None
+        
+        return completed_outputs
 
     def _run_prefill(self, seq):
         if self.use_paged_attention:
             self._run_prefill_paged(seq)
         else:
             self._run_prefill_legacy(seq)
-
-    def _run_prefill_legacy(self, seq):
-        pass
 
     def _run_prefill_paged(self, sequence): 
         """Per sequence prefill for simplicity but compute units sip juice"""
@@ -167,7 +186,7 @@ class LLMEngine:
             # Partial cache hit process only the remaining non-cache token
             token_to_process = sequence.prompt_token_ids[sequence.shared_prefix_len:]
             start_position = sequence.shared_prefix_len
-        elif sequence.shared_prefix_len >= prompt_len
+        elif sequence.shared_prefix_len >=prompt_len:
             # Full cache hit we only need to run forward for for the last token 
             # KV cache is already populated for all prompt tokens 
             tokens_to_process = [sequence.prompt_token_ids[-1]]
@@ -236,10 +255,6 @@ class LLMEngine:
             next_token = self.sampler.greedy_decoding(logits)
             sequence.append_token(next_token.item())
 
-
-    def _run_batched_chuncked_prefill():
-        pass
-
     def run_decode(self, sequences):
         """Run decode on batched sequences one token per sequence"""
         if self.use_paged_attention:
@@ -257,30 +272,115 @@ class LLMEngine:
                     seq.block_table.append(block_id)
 
         #prepare batched input = last token id from each sequence
-        input_ids = torch.tensor([seq.get_last_token_id() for seq in sequences], 
+        input_ids = torch.tensor([[seq.get_last_token_id()] for seq in sequences], 
                                  dtype= torch.long,
                                  device=self.device,
                                 ) # [B, 1]
-        block_tables 
-        slot_mapping = 
+        block_tables = [sequence.block_table for sequence in sequences]
 
-    def run_decode_legacy(self, sequences):
-        pass
+        # absolute position of current decode token
+        start_positions = [[sequence.get_len() -1] for sequence in sequence] # [B, 1]
+        
+        context_lens = [sequence.get_len() for sequence in sequences] # [B]
+
+        slot_mapping = []
+        for sequence in sequences:
+            # get the current position of this token in the sequence
+            i_current_position = sequence.get_len() - 1
+            slot_for_current_i = sequence.block_table.slot_mapping(i_current_position)
+            slot_mapping.append(slot_for_current_i)
+
+        metadata = Metadata(
+            is_prefill=False,
+            block_table = torch.tensor(block_tables, dtype=self.dtype, device=self.device),
+            context_lens=context_lens,
+            slot_mapping=torch.tensor(slot_mapping, dtype=torch.int32, device=self.device),
+            positions=torch.tensor(start_positions, dtype=torch.long, device=self.device))
+        
+        logits = self.model(
+            input_ids, metadata, self.block_kv_cache
+        )
+        next_token = self.sample.greedy_decoding(logits) #[batch_size]
+
+        for i, seq in enumerate(sequences):
+            seq.append_token(next_token[i].item())
 
     def _create_output(self, seq):
-        pass
+        """Output for a finished sequence"""
+        all_tokens = seq.get_token_ids()
+        generated_text = self.tokenizer.decode(all_tokens, skip_special_tokens=True)
 
+        return GenerationOutput(
+            seq_id=seq.seq_id,
+            prompt=self._prompts.get(seq.seq_id, ""),
+            generated_text=generated_text,
+            prompt_tokens= seq.get_prompt_len(),
+            generated_tokens=seq.get_output_len(),
+        )
     def _run_to_completion(self):
-        pass
+        """Run until all pending requests are complete"""
+        all_outputs = []
+        while self.scheduler.has_pending_requests():
+            completed_outputs = self.step()
+            all_outputs.extend(completed_outputs)
 
+            all_outputs.sort(key=lambda x: x.seq_id)
+            return all_outputs
+        
     def generate(self, prompt, max_tokens=100):
-        pass
+        self.add_request(prompt, max_tokens)
+        outputs = self._run_to_completion
+        return outputs[0].generated_text if outputs else ""
 
     def generate_batch(self, prompts, max_tokens=100):
-        pass
+        for prompt in prompts:
+            self.add_request(prompt, max_tokens)
+        
+        outputs = self._run_to_completion()
 
-    def get_stats(self):
-        pass
+        return [output.generated_text for output in outputs]
+
+    def get_stats(self) -> dict:
+        """Return engine statistics."""
+        stats = {
+            "model_layers": self.config.num_hidden_layers,
+            "hidden_size": self.config.hidden_size,
+            "vocab_size": self.config.vocab_size,
+            "num_attention_heads": self.config.num_attention_heads,
+            "num_kv_heads": self.config.num_key_value_heads,
+            "max_seq_len": self.max_seq_len,
+            "max_batch_size": self.max_batch_size,
+            "scheduler": str(self.scheduler),
+            "use_paged_attention": self.use_paged_attention,
+            # Advanced scheduling (Phase 4)
+            "scheduling_policy": self.scheduling_policy.value,
+            "enable_preemption": self.enable_preemption,
+            "max_prefill_tokens": self.max_prefill_tokens,
+            "enable_prefix_caching": self.enable_prefix_caching,
+            # Optimizations (Phase 5)
+            "use_flash_attn": self.use_flash_attn,
+            "flash_attn_available": self.model.use_flash_attn if hasattr(self.model, 'use_flash_attn') else False,
+        }
+
+        # Add PagedAttention-specific stats
+        if self.use_paged_attention:
+            stats.update({
+                "block_size": self.block_size,
+                "total_blocks": self.block_manager.num_blocks,
+                "free_blocks": self.block_manager.get_num_free_blocks(),
+                "used_blocks": self.block_manager.num_blocks - self.block_manager.get_num_free_blocks(),
+                "kv_cache_memory_mb": self.block_kv_cache.memory_usage_mb,
+            })
+
+            # Add prefix cache stats
+            if self.enable_prefix_caching:
+                prefix_stats = self.block_manager.get_prefix_cache_stats()
+                stats.update({
+                    "prefix_cache_blocks": prefix_stats["cached_blocks"],
+                    "prefix_cache_refs": prefix_stats["total_references"],
+                })
+
+        return stats
 
     def _run_batched_prefill_paged(self, sequences):
         """"Batched prefill (offers better throughput and GPU compute unit usage)"""
@@ -308,6 +408,10 @@ class LLMEngine:
                 block_tables=None,)
         pass
 
+    def _run_prefill_legacy(self, seq):
+        pass
+    def run_decode_legacy(self, sequences):
+        pass
 
-
-
+    def _run_batched_chuncked_prefill():
+        pass

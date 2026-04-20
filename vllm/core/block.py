@@ -83,7 +83,13 @@ class BlockTable:
             global_slot = physical_block  * self.block_size + slot_in_block
             slots.append(global_slot)
         return slots
-    
+    def slot_mapping_for_pos(self, pos):
+        slots = []
+        logical_block_pos = pos // self.block_size
+        slot_in_block = pos % self.block_size
+        physical_block_id = self.block_ids[logical_block_pos]
+        global_slot = physical_block_id * self.block_size + slot_in_block
+        
     def slot_mapping_range(self, start_pos, end_pos):
         slots = []
         for pos in range(start_pos, end_pos):

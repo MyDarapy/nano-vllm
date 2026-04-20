@@ -4,11 +4,11 @@ import torch.nn.functional as F
 
 import math 
 
-from engine.config import ModelConfig 
+from vllm.config import ModelConfig 
 from vllm.attention.flash_attention import TritonFlashAttention
 from vllm.attention.paged_attention import paged_decode_attn
-from vllm.engine.kv_scatter import store_kvcache
-from vllm.engine.core.cache import BlockKCache
+from vllm.core.kv_scatter import store_kvcache
+from vllm.core.cache import BlockKCache
 
 
 class RMSNorm(nn.Module):

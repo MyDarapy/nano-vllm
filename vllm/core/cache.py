@@ -5,9 +5,8 @@
 
 """
 
-
-from vllm.engine.core.block import BLOCK_SIZE
-from vllm.engine.config import ModelConfig
+from vllm.core.block import BLOCK_SIZE
+from vllm.config import ModelConfig
 
 import time
 import torch

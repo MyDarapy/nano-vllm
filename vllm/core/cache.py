@@ -35,7 +35,15 @@ class KVCache:
         self._pending_seq_len = 0 
 
         # pre-allocate the cache
-        self.cache = torch.zeros(self.num_layers, 2, self.num_kv_heads, self.max_seq_len, self.head_dim)
+        self.cache = torch.zeros(
+            self.num_layers,
+            2,
+            self.num_kv_heads,
+            self.max_seq_len,
+            self.head_dim,
+            device=device,
+            dtype=dtype,
+        )
 
 
     def begin_forward(self, new_seq_len):
@@ -64,7 +72,7 @@ class KVCache:
         # Each sequence owns the KV cache. No sharing. 
         end_pos = write_pos + new_seq_len
         keys = self.cache[layer_idx, 0, :, :end_pos, :].unsqueeze(0)
-        values = self.cache[layer_idx, 1, :, :end_pos, :].unsequeeze(0)
+        values = self.cache[layer_idx, 1, :, :end_pos, :].unsqueeze(0)
 
         return keys, values
     
@@ -78,6 +86,7 @@ class KVCache:
         "Return sequence length memory usage in MB"
         return self.cache.element_size() * self.cache.numel() / (1024 * 1024)
 
+    @staticmethod
     def gather_kv_cache(caches, layer_idx):
         """Gather the KV states from multiple sequence cache for batched attention"""
         if not caches:
@@ -106,6 +115,7 @@ class KVCache:
             seq_len = cache.seq_len
             keys[i, :, :seq_len, :] = cache.cache[layer_idx, 0, :, :seq_len, :]
             values[i, :, :seq_len, :] = cache.cache[layer_idx, 1, :, :seq_len, :]
+        return keys, values
 
 class BlockKCache():
     """A single pool of block. Sequences references this via their block table"""
@@ -115,6 +125,7 @@ class BlockKCache():
                 device, dtype):
         
         self.block_size = block_size
+        self.num_blocks = num_blocks
         self.num_layers = num_layers
         self.num_kv_heads = num_kv_heads
         self.head_dim = head_dim
@@ -166,4 +177,4 @@ class BlockKCache():
             f"BlockKVCache(blocks={self.num_blocks}, "
             f"layers={self.num_layers},"
             f"block_size={self.block_size}, "
-            f"memory={self.memeory_usage_mb: .1f}MB)")
+            f"memory={self.memory_usage_mb: .1f}MB)")

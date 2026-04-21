@@ -5,7 +5,7 @@ from  vllm.config import ModelConfig
 from vllm.models.llama import LlamaForCausalLM
 from pathlib import Path
 
-def load_model(
+def load_models(
         model_path,
         device="cuda",
         dtype= torch.float16,
@@ -19,10 +19,11 @@ def load_model(
     print(f"Hidden size: {config.hidden_size}")
     print(f"Layers: {config.num_hidden_layers}")
     print(f"Attention heads: {config.num_attention_heads}")
-    print(f"  KV heads: {config.num_key_value_heads}")
+    print(f"  KV heads: {config.num_kv_heads}")
     print(f"  FlashAttention: {use_flash_attn}")
 
-    model = LlamaForCausalLM(config, use_flash_attn=use_flash_attn)
+    model = LlamaForCausalLM(config)
+    model.use_flash_attn = use_flash_attn
     state_dict = _load_weights(local_path)
     mapped_state_dict = _map_weights(state_dict)
     model.load_state_dict(mapped_state_dict, strict=True)
@@ -35,12 +36,12 @@ def _get_local_path(model_path):
     if path.exists():
         return path
     local_dir = snapshot_download(repo_id=model_path,
-                                  allow_patterns=["*.safetenors", "*.json"],)
+                                  allow_patterns=["*.safetensors", "*.json"],)
     
     return Path(local_dir)
 
 def _load_weights(model_path):
-    state_dict = []
+    state_dict = {}
 
     safetensors_files = list(model_path.glob("*.safetensors"))
     if not safetensors_files:
@@ -56,11 +57,9 @@ def _load_weights(model_path):
 def _map_weights(hf_state_dict):
     mapped = {}
     for name, tensor in hf_state_dict.items():
-        for name, tensor in hf_state_dict.items():
-            if "rotary_emb" in name:
-                continue
+        if "rotary_emb" in name:
+            continue
 
-            mapped[name] = tensor
+        mapped[name] = tensor
     return mapped
-
 

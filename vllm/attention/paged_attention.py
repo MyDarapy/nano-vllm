@@ -76,33 +76,28 @@ def paged_decode_kernel(q_ptr,
     out_block_ptr = output_ptr + cur_batch * stride_ob + cur_head * stride_oh + offset_dim
     tl.store(out_block_ptr, acc.to(output_ptr.dtype.element_ty))
 
-
-def paged_decode_attn(query,
-                      block_kv_cache,
-                      layer_idx,
-                      block_tables,
-                      context_length     # context length is a list [batch] the actual length of each sequences 
-                      ):
-    batch_size, num_heads, head_dim = query.shape
-
-    k_cache, v_cache = block_kv_cache.get_layer_cache(layer_idx)
-
-    output = torch.empty_like(query)
-
-    grid = (batch_size, num_heads)
-
-    paged_decode_kernel[grid](query, k_cache, v_cache, block_tables, context_length,
-                              output, query.stride(0), query.stride(1), 
-                              k_cache.stride(0), k_cache.stride(1), k_cache.stride(2),
-                              v_cache.stride(0), v_cache.stride(1), v_cache.stride(2),
-                              output.stride(0), output.stride(1),
-                              block_tables.stride(0),
-                              NUM_KV_HEADS = block_kv_cache.num_kv_heads,
-                              BLOCK_SIZE = block_kv_cache.block_size,
-                              HEAD_DIM = head_dim,
-                              SCALE = head_dim ** -0.5
-                              )
-    return output
+class PagedFlashAttention(torch.autograd.Function):
+    def paged_decode_attn(
+            query, block_kv_cache,
+            layer_idx,
+            block_tables,
+            context_length):   # context length is a list [batch] the actual length of each sequences
+         
+         batch_size, num_heads, head_dim = query.shape
+         k_cache, v_cache = block_kv_cache.get_layer_cache(layer_idx)
+         output = torch.empty_like(query)
+         grid = (batch_size, num_heads)
+         
+         paged_decode_kernel[grid](query, k_cache, v_cache, block_tables, context_length,
+                                  output, query.stride(0), query.stride(1), 
+                                  k_cache.stride(0), k_cache.stride(1), k_cache.stride(2),
+                                  v_cache.stride(0), v_cache.stride(1), v_cache.stride(2),
+                                  output.stride(0), output.stride(1), block_tables.stride(0),
+                                  NUM_KV_HEADS = block_kv_cache.num_kv_heads,
+                                  BLOCK_SIZE = block_kv_cache.block_size,
+                                  HEAD_DIM = head_dim,
+                                  SCALE = head_dim ** -0.5)
+         return output
     
                              
                                                       

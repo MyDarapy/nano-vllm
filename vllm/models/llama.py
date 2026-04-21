@@ -1,14 +1,26 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F 
-
-import math 
+import math
+from typing import Tuple, Union
 
 from vllm.config import ModelConfig 
-from vllm.attention.flash_attention import TritonFlashAttention
-from vllm.attention.paged_attention import paged_decode_attn
-from vllm.core.kv_scatter import store_kvcache
-from vllm.core.cache import BlockKCache
+from vllm.core.cache import BlockKCache, KVCache
+
+try:
+    from vllm.attention.flash_attention import TritonFlashAttention
+except Exception:
+    TritonFlashAttention = None
+
+try:
+    from vllm.attention.paged_attention import PagedFlashAttention
+except Exception:
+    PagedFlashAttention = None
+
+try:
+    from vllm.core.kv_scatter import store_kvcache
+except Exception:
+    store_kvcache = None
 
 
 class RMSNorm(nn.Module):
@@ -102,46 +114,111 @@ class LlamaAttention(nn.Module):
                                           base=config.rope_theta,)
         
         self.layer_idx = layer_idx
-        self.flash_attention= TritonFlashAttention()
-        #self.paged_attention = FlashPaged()
+        self.flash_attention = TritonFlashAttention() if TritonFlashAttention is not None else None
+        self.paged_attention = PagedFlashAttention() if PagedFlashAttention is not None else None
 
+    def _repeat_kv(self, x: torch.Tensor) -> torch.Tensor:
+        if self.num_kv_heads == self.num_heads:
+            return x
+        return x.repeat_interleave(self.num_kv_groups, dim=1)
 
-    def forward(self, x, metadata, kv_cache: BlockKCache):
+    def _reference_attention(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        causal: bool,
+    ) -> torch.Tensor:
+        k = self._repeat_kv(k)
+        v = self._repeat_kv(v)
+        scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
+        if causal:
+            q_len = q.shape[-2]
+            k_len = k.shape[-2]
+            causal_mask = torch.tril(
+                torch.ones((q_len, k_len), device=q.device, dtype=torch.bool)
+            )
+            scores = scores.masked_fill(~causal_mask, float("-inf"))
+        probs = torch.softmax(scores, dim=-1, dtype=torch.float32).to(q.dtype)
+        return torch.matmul(probs, v)
+
+    def _get_position_ids(
+        self,
+        metadata,
+        batch_size: int,
+        seq_len: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        if metadata.positions is None:
+            return torch.arange(seq_len, device=device).unsqueeze(0).expand(batch_size, -1)
+        if metadata.positions.dim() == 1:
+            return metadata.positions.unsqueeze(0)
+        return metadata.positions
+
+    def forward(self, x, metadata, kv_cache: Union[KVCache, BlockKCache]):
         batch_size, seq_len, _ = x.shape
 
-        q = self.proj(x) # [B, S, H_q * head_dim]
-        k = self.proj(x) # [B, S, H_kv * head_dim]
-        v = self.proj(x) # [B, S, H_kv * head_dim]
+        q = self.q_proj(x) # [B, S, H_q * head_dim]
+        k = self.k_proj(x) # [B, S, H_kv * head_dim]
+        v = self.v_proj(x) # [B, S, H_kv * head_dim]
   
-
         q = q.view(batch_size, seq_len, self.num_heads, self.head_dim)
         k = k.view(batch_size, seq_len, self.num_kv_heads, self.head_dim)
         v = v.view(batch_size, seq_len, self.num_kv_heads, self.head_dim)
 
-        q, k = apply_rotary_pos_emb(q, k)
-        k_for_cache = k.view(-1, self.num_kv_heads, self.head_dim)
-        v_for_cache = v.view(-1, self.num_kv_heads, self.head_dim)
-        
-        assert metadata.slot_mapping is not None, "slot mapping needed for KV scatter"
-        
-        store_kvcache(self.layer_idx, 
-                      k_for_cache,
-                      v_for_cache, 
-                      kv_cache,
-                      metadata.slot_mapping)
-        
-        if metadata.is_prefill:
-            #q = q.permute(0, 2, 1, 3).contiguous()
-            #k = k.permute(0, 2, 1, 3).contiguous()
-            #v = v.permute(0, 2, 1, 3).contiguous()
+        position_ids = self._get_position_ids(metadata, batch_size, seq_len, x.device)
+        cos, sin = self.rotary_emb(q, position_ids)
 
-            attn_output = self.flash_attention(q, k, v, causal=True)
+        q = q.transpose(1, 2).contiguous()  # [B, Hq, S, D]
+        k = k.transpose(1, 2).contiguous()  # [B, Hkv, S, D]
+        v = v.transpose(1, 2).contiguous()  # [B, Hkv, S, D]
+
+        q, k = apply_rotary_pos_emb(q, k, cos, sin)
+
+        if isinstance(kv_cache, BlockKCache):
+            if store_kvcache is None or self.paged_attention is None:
+                raise RuntimeError(
+                    "Paged attention dependencies are unavailable. Install triton to use BlockKCache mode."
+                )
+            k_for_cache = k.transpose(1, 2).contiguous().view(-1, self.num_kv_heads, self.head_dim)
+            v_for_cache = v.transpose(1, 2).contiguous().view(-1, self.num_kv_heads, self.head_dim)
+
+            if metadata.slot_mapping is None:
+                raise ValueError("slot_mapping is required when using BlockKCache")
+
+            store_kvcache(
+                self.layer_idx,
+                k_for_cache,
+                v_for_cache,
+                kv_cache,
+                metadata.slot_mapping.reshape(-1),
+            )
+
+            if metadata.is_prefill:
+                if self.flash_attention is None:
+                    raise RuntimeError(
+                        "Flash attention dependencies are unavailable. Install triton to use paged prefill."
+                    )
+                attn_output = self.flash_attention.flash_attention(q, k, v, causal=True)
+            else:
+                q_step = q[:, :, -1, :]
+                attn_output = self.paged_attention.paged_decode_attn(
+                    q_step,
+                    kv_cache,
+                    self.layer_idx,
+                    metadata.block_tables,
+                    metadata.context_lens,
+                ).unsqueeze(2)
         else:
-            q_step = q.squeeze(1)
-            attn_output = self.paged_attention(q_step, kv_cache, metadata.block_tables,
-                                               metadata.context_lens)
-            attn_output = attn_output.unsqueeze(1)
+            keys, values = kv_cache.update(self.layer_idx, k, v)
+            attn_output = self._reference_attention(
+                q,
+                keys,
+                values,
+                causal=metadata.is_prefill,
+            )
         
+        attn_output = attn_output.transpose(1, 2).contiguous()
         return self.o_proj(attn_output.view(batch_size, seq_len, -1))
 
         
@@ -176,7 +253,7 @@ class LlamaDecoderLayer(nn.Module):
         self.pre_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
-    def forward(self, x, metadata, kv_cache: BlockKCache):
+    def forward(self, x, metadata, kv_cache: Union[KVCache, BlockKCache]):
         residual = x 
         x = self.pre_layernorm(x)
         x = residual + self.attention(x, metadata, kv_cache)
@@ -188,21 +265,27 @@ class LlamaDecoderLayer(nn.Module):
 
 class LlamaForCausalLM(nn.Module):
     def __init__(self, config):
+        super().__init__()
         self.config = config
         self.vocab_size = config.vocab_size
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size)
         self.layers = nn.ModuleList([LlamaDecoderLayer(config, layer_idx)] 
-                                    for layer_idx in config.num_hidden_layers)
+                                    for layer_idx in range(config.num_hidden_layers))
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
-    def forward(self, input_ids, metadata, kv_cache):
+    def forward(self, input_ids, metadata, kv_cache: Union[KVCache, BlockKCache]):
         x = self.embed_tokens(input_ids)
-        for layer in self.layers:
-            x = layer(x, metadata, kv_cache)
+        if isinstance(kv_cache, KVCache):
+            kv_cache.begin_forward(input_ids.shape[1])
+        try:
+            for layer in self.layers:
+                x = layer(x, metadata, kv_cache)
+        finally:
+            if isinstance(kv_cache, KVCache):
+                kv_cache.end_forward()
 
         x = self.norm(x)
         logits = self.lm_head(x)
         return logits 
-

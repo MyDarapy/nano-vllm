@@ -1,5 +1,6 @@
-from dataclasses import dataclass, field
 import math
+from dataclasses import dataclass, field
+from typing import Optional
 BLOCK_SIZE = 16 # NUMBER OF TOKENS PER BLOCK
 
 
@@ -10,7 +11,7 @@ def hash_token_block(token_ids, parent_hash):
     if parent_hash is None:
         return hash(token_ids)
     else:
-        return hash (parent_hash, token_ids)
+        return hash((parent_hash, token_ids))
     
 
 @dataclass
@@ -18,8 +19,8 @@ class Block:
     block_id : int
     block_size : int 
     ref_count: int = 1
-    prefix_hash = None
-    is_full = False
+    prefix_hash: Optional[int] = None
+    is_full: bool = False
 
     def increment_ref(self):
         self.ref_count += 1
@@ -29,13 +30,13 @@ class Block:
         return self.ref_count
     
     def __repr__(self):
-        return f"Block_id: {self.block_id}, refs: {self.ref_count}, hash:{self.prefix_count}"
+        return f"Block_id: {self.block_id}, refs: {self.ref_count}, hash:{self.prefix_hash}"
 
 @dataclass
 class BlockTable:
     # The index of this list represents the logical block index, the value represent the physical block
-    block_ids = field(default_factory=list) 
-    block_size = BLOCK_SIZE
+    block_ids: list[int] = field(default_factory=list)
+    block_size: int = BLOCK_SIZE
 
     def get_block_id(self, logical_block_index):
         """logical block index is the index of block within a sequence. This function gets the physical block id
@@ -67,9 +68,12 @@ class BlockTable:
     def num_of_allocated_blocks(self):
         "The total number of physical block allocated so far for the sequence"
         return len(self.block_ids)
+
+    def num_blocks(self):
+        return len(self.block_ids)
     
-    def get_physical_block_id(self):
-        return self.block_id.copy()
+    def get_physical_block_ids(self):
+        return self.block_ids.copy()
     
     def slot_mapping(self, seq_len):
         "slot_mapping[i] produces slot indices for exact posiitons where tokens KV are stored in global cache"
@@ -84,11 +88,11 @@ class BlockTable:
             slots.append(global_slot)
         return slots
     def slot_mapping_for_pos(self, pos):
-        slots = []
         logical_block_pos = pos // self.block_size
         slot_in_block = pos % self.block_size
         physical_block_id = self.block_ids[logical_block_pos]
         global_slot = physical_block_id * self.block_size + slot_in_block
+        return global_slot
         
     def slot_mapping_range(self, start_pos, end_pos):
         slots = []
@@ -104,4 +108,3 @@ def compute_blocks(seq_len, block_size=BLOCK_SIZE):
     """Calculates the amount of blocks a given sequence will need"""
     total_blocks = math.ceil(seq_len / block_size)
     return total_blocks
-

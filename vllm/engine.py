@@ -6,12 +6,12 @@ from dataclasses import dataclass
 from vllm.config import ModelConfig, Metadata
 from vllm.models.llama import LlamaForCausalLM
 from vllm.loader import load_models
-from vllm.engine.core.cache import KVCache, BlockKCache
-from vllm.engine.core.block_manager import BlockManager
-from vllm.engine.core.block import BLOCK_SIZE, BlockTable, compute_blocks
+from vllm.core.cache import KVCache, BlockKCache
+from vllm.core.block_manager import BlockManager
+from vllm.core.block import BLOCK_SIZE, BlockTable, compute_blocks
 from vllm.sampler import Sampler
-from vllm.engine.core.scheduler import Scheduler, SchedulerOutputs, SchedulingPolicy
-from vllm.engine.core.sequence import  Sequence, SequenceStatus
+from vllm.core.scheduler import Scheduler, SchedulerOutputs, SchedulingPolicy
+from vllm.core.sequence import  Sequence, SequenceStatus
 from vllm.utils import input_padding
 
 @dataclass
@@ -59,7 +59,12 @@ class LLMEngine:
         self.use_flash_attn = use_flash_attn
 
         print(f"Loading mdoel from {model_path}")
-        self.model = load_models(model_path, device=device, dtype=dtype)
+        self.model = load_models(
+            model_path,
+            device=device,
+            dtype=dtype,
+            use_flash_attn=use_flash_attn,
+        )
         self.config = self.model.config
         print(f"Model loaded: {self.config.num_hidden_layers} layers, {self.config.hidden_size} hidden_size")
 
@@ -107,7 +112,7 @@ class LLMEngine:
                 max_batch_size=max_batch_size,
                 scheduling_policy=scheduling_policy,
                 enable_preemption=False,
-                max_prefill_tokens = max_prefill_tokens
+                max_prefill_tokens=max_seq_len,
             )
         self._prompts = {}
 
@@ -116,6 +121,14 @@ class LLMEngine:
         """Caluclate the number of blocks based on the available memory"""
         blocks_per_seq = (self.max_seq_len + self.block_size -1) // self.block_size
         return blocks_per_seq * self.max_batch_size
+
+    def _build_positions(self, start: int, length: int) -> torch.Tensor:
+        return torch.arange(
+            start,
+            start + length,
+            device=self.device,
+            dtype=torch.long,
+        ).unsqueeze(0)
     
 
     def add_request(self,
@@ -177,8 +190,7 @@ class LLMEngine:
 
     def _run_prefill_paged(self, sequence): 
         """Per sequence prefill for simplicity but compute units sip juice"""
-        prompt_len = sequence.get_prompt(len)
-        num_blocks_needed = compute_blocks(prompt_len, self.block_size)
+        prompt_len = sequence.get_prompt_len()
         sequence.block_table, sequence.shared_prefix_len = (
             self.block_manager.allocate_block_with_prefix_caching(sequence.prompt_token_ids))
         
@@ -197,15 +209,17 @@ class LLMEngine:
             start_position = 0 
         
         input_ids = torch.tensor([tokens_to_process], dtype=torch.long, device=self.device)
-        context_len = [prompt_len]
-        slot_mapping = sequence.block_table.slot_mapping(prompt_len)
+        slot_mapping = sequence.block_table.slot_mapping_range(
+            start_position,
+            start_position + len(tokens_to_process),
+        )
 
         metadata = Metadata(
             is_prefill=True,
-            block_tables=[sequence.block_table],
-            context_len=context_len,
+            block_tables=None,
+            context_lens=torch.tensor([prompt_len], dtype=torch.long, device=self.device),
             slot_mapping=torch.tensor(slot_mapping, dtype=torch.int32, device=self.device),
-            positions=start_position
+            positions=self._build_positions(start_position, len(tokens_to_process)),
         )
         #Forward pass for PagedAttention prefill
         logits = self.model(input_ids, metadata, kv_cache=self.block_kv_cache)
@@ -221,7 +235,7 @@ class LLMEngine:
 
         # calculate the amount of blocks needed for this chunk
         total_tokens_after = end_pos 
-        blocks_needed = compute_blocks(total_tokens_after, sequence.block_size)
+        blocks_needed = compute_blocks(total_tokens_after, self.block_size)
 
         if sequence.block_table is None:
             sequence.block_table = self.block_manager.allocate_blocks_for_sequence(blocks_needed)
@@ -233,14 +247,13 @@ class LLMEngine:
                 sequence.block_table.append_block(block_id)
 
         input_ids = torch.tensor([chunk_tokens], dtype=torch.long, device=self.device)
-        context_lens = [end_pos] #total token we will have after this chunk 
-        start_position = [start_pos]
+        context_lens = torch.tensor([end_pos], dtype=torch.long, device=self.device)
         slot_mapping = sequence.block_table.slot_mapping_range(start_pos, end_pos)
-        positions = torch.arange(start_pos, end_pos, device=self.device).unsqueeze(1)
+        positions = self._build_positions(start_pos, len(chunk_tokens))
 
         metadata = Metadata(
             is_prefill=True,
-            block_table = [sequence.block_table],
+            block_tables=None,
             context_lens=context_lens,
             slot_mapping=torch.tensor(slot_mapping, dtype=torch.int32, device=self.device),
             positions=positions
@@ -248,7 +261,7 @@ class LLMEngine:
         logits = self.model(input_ids, metadata, kv_cache=self.block_kv_cache)
 
         # Update prefill progress
-        sequence.num_prefill_tokens = end_pos
+        sequence.num_prefilled_tokens = end_pos
 
         #If all prompt tokens are processed sample the first output token
         if sequence.num_prefilled_tokens >= len(sequence.prompt_token_ids):
@@ -258,9 +271,9 @@ class LLMEngine:
     def run_decode(self, sequences):
         """Run decode on batched sequences one token per sequence"""
         if self.use_paged_attention:
-            self._run_batched_decode_paged(sequences)
+            self.run_batched_decode_paged(sequences)
         else:
-            self._run_decode_legacy
+            self.run_decode_legacy(sequences)
 
     def run_batched_decode_paged(self, sequences):
         batch_size = len(sequences)
@@ -269,7 +282,7 @@ class LLMEngine:
             if new_blocks_needed > 0:
                 for _ in range(new_blocks_needed):
                     block_id = self.block_manager.allocate_block()
-                    seq.block_table.append(block_id)
+                    seq.block_table.append_block(block_id)
 
         #prepare batched input = last token id from each sequence
         input_ids = torch.tensor([[seq.get_last_token_id()] for seq in sequences], 
@@ -279,7 +292,7 @@ class LLMEngine:
         block_tables = [sequence.block_table for sequence in sequences]
 
         # absolute position of current decode token
-        start_positions = [[sequence.get_len() -1] for sequence in sequence] # [B, 1]
+        start_positions = [[sequence.get_len() - 1] for sequence in sequences] # [B, 1]
         
         context_lens = [sequence.get_len() for sequence in sequences] # [B]
 
@@ -287,20 +300,32 @@ class LLMEngine:
         for sequence in sequences:
             # get the current position of this token in the sequence
             i_current_position = sequence.get_len() - 1
-            slot_for_current_i = sequence.block_table.slot_mapping(i_current_position)
+            slot_for_current_i = sequence.block_table.slot_mapping_for_pos(i_current_position)
             slot_mapping.append(slot_for_current_i)
+
+        max_blocks = max(table.num_blocks() for table in block_tables)
+        block_table_tensor = torch.full(
+            (batch_size, max_blocks),
+            -1,
+            dtype=torch.long,
+            device=self.device,
+        )
+        for i, table in enumerate(block_tables):
+            block_ids = torch.tensor(table.block_ids, dtype=torch.long, device=self.device)
+            block_table_tensor[i, : table.num_blocks()] = block_ids
 
         metadata = Metadata(
             is_prefill=False,
-            block_table = torch.tensor(block_tables, dtype=self.dtype, device=self.device),
-            context_lens=context_lens,
+            block_tables=block_table_tensor,
+            context_lens=torch.tensor(context_lens, dtype=torch.long, device=self.device),
             slot_mapping=torch.tensor(slot_mapping, dtype=torch.int32, device=self.device),
-            positions=torch.tensor(start_positions, dtype=torch.long, device=self.device))
+            positions=torch.tensor(start_positions, dtype=torch.long, device=self.device),
+        )
         
         logits = self.model(
             input_ids, metadata, self.block_kv_cache
         )
-        next_token = self.sample.greedy_decoding(logits) #[batch_size]
+        next_token = self.sampler.greedy_decoding(logits) #[batch_size]
 
         for i, seq in enumerate(sequences):
             seq.append_token(next_token[i].item())
@@ -324,12 +349,12 @@ class LLMEngine:
             completed_outputs = self.step()
             all_outputs.extend(completed_outputs)
 
-            all_outputs.sort(key=lambda x: x.seq_id)
-            return all_outputs
+        all_outputs.sort(key=lambda x: x.seq_id)
+        return all_outputs
         
     def generate(self, prompt, max_tokens=100):
         self.add_request(prompt, max_tokens)
-        outputs = self._run_to_completion
+        outputs = self._run_to_completion()
         return outputs[0].generated_text if outputs else ""
 
     def generate_batch(self, prompts, max_tokens=100):
@@ -347,7 +372,7 @@ class LLMEngine:
             "hidden_size": self.config.hidden_size,
             "vocab_size": self.config.vocab_size,
             "num_attention_heads": self.config.num_attention_heads,
-            "num_kv_heads": self.config.num_key_value_heads,
+            "num_kv_heads": self.config.num_kv_heads,
             "max_seq_len": self.max_seq_len,
             "max_batch_size": self.max_batch_size,
             "scheduler": str(self.scheduler),
@@ -374,10 +399,10 @@ class LLMEngine:
 
             # Add prefix cache stats
             if self.enable_prefix_caching:
-                prefix_stats = self.block_manager.get_prefix_cache_stats()
+                prefix_stats = self.block_manager.get_prefix_cache_stat()
                 stats.update({
-                    "prefix_cache_blocks": prefix_stats["cached_blocks"],
-                    "prefix_cache_refs": prefix_stats["total_references"],
+                    "prefix_cache_blocks": prefix_stats["number_of_cached_blocks"],
+                    "prefix_cache_refs": prefix_stats["total_reference"],
                 })
 
         return stats
@@ -409,9 +434,41 @@ class LLMEngine:
         pass
 
     def _run_prefill_legacy(self, seq):
-        pass
+        if seq.kv_cache is None:
+            seq.kv_cache = KVCache(
+                self.config,
+                max_seq_len=self.max_seq_len,
+                device=self.device,
+                dtype=self.dtype,
+            )
+        else:
+            seq.kv_cache.reset()
+
+        input_ids = torch.tensor([seq.prompt_token_ids], dtype=torch.long, device=self.device)
+        metadata = Metadata(
+            is_prefill=True,
+            positions=self._build_positions(0, len(seq.prompt_token_ids)),
+            context_lens=torch.tensor([len(seq.prompt_token_ids)], dtype=torch.long, device=self.device),
+        )
+        logits = self.model(input_ids, metadata, kv_cache=seq.kv_cache)
+        next_token = self.sampler.greedy_decoding(logits)
+        seq.num_prefilled_tokens = len(seq.prompt_token_ids)
+        seq.append_token(next_token.item())
+
     def run_decode_legacy(self, sequences):
-        pass
+        for seq in sequences:
+            if seq.kv_cache is None:
+                raise RuntimeError(f"Sequence {seq.seq_id} is missing a legacy KV cache")
+
+            input_ids = torch.tensor([[seq.get_last_token_id()]], dtype=torch.long, device=self.device)
+            metadata = Metadata(
+                is_prefill=False,
+                positions=torch.tensor([[seq.get_len() - 1]], dtype=torch.long, device=self.device),
+                context_lens=torch.tensor([seq.get_len()], dtype=torch.long, device=self.device),
+            )
+            logits = self.model(input_ids, metadata, kv_cache=seq.kv_cache)
+            next_token = self.sampler.greedy_decoding(logits)
+            seq.append_token(next_token.item())
 
     def _run_batched_chuncked_prefill():
         pass

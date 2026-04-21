@@ -1,2 +1,5 @@
 torch 
-hugggingface_hub 
+huggingface_hub 
+transformers 
+triton
+safetensors

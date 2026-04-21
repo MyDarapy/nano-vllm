@@ -2,7 +2,7 @@
 import torch 
 
 class Sampler:
-    def __init__(self, k, t):
+    def __init__(self, k=50, t=1.0):
         self.temperature = t
         self.k = k 
 
@@ -10,7 +10,7 @@ class Sampler:
         # Get logits for the last position only
         #logits.shape [batch_size, seq_len, vocab_size]
 
-        last_logits = logits[:, -1. :] #
+        last_logits = logits[:, -1, :]
         next_tokens = torch.argmax(last_logits, dim=-1)
 
         return next_tokens
@@ -20,4 +20,3 @@ class Sampler:
 
     def top_p_sampling(self, logits):
         pass
-

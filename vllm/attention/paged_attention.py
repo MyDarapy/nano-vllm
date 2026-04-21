@@ -19,7 +19,7 @@ def paged_decode_kernel(q_ptr,
                         SCALE:tl.constexpr,
 ):
     
-    cur_batch = tl.program__id(0)
+    cur_batch = tl.program_id(0)
     cur_head = tl.program_id(1)
 
     num_q_heads = tl.num_programs(1)
@@ -56,7 +56,7 @@ def paged_decode_kernel(q_ptr,
                  + cur_kv_head * stride_vhc + offset_dim[None, :])
         
         k_block = tl.load(k_ptr, mask=mask[:, None], other=0.0)
-        v_block = tl.laod(v_ptr, mask=mask[:, None], other=0.0)
+        v_block = tl.load(v_ptr, mask=mask[:, None], other=0.0)
         """"Calculate the attention scores"""
         qk = tl.sum(q_vec[None, :] * k_block, axis=1) # matrix vector multiplication [1, 64] * [16, 64] = [16]
         qk *= SCALE
@@ -77,6 +77,7 @@ def paged_decode_kernel(q_ptr,
     tl.store(out_block_ptr, acc.to(output_ptr.dtype.element_ty))
 
 class PagedFlashAttention(torch.autograd.Function):
+    @staticmethod
     def paged_decode_attn(
             query, block_kv_cache,
             layer_idx,

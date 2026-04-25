@@ -60,6 +60,12 @@ def _map_weights(hf_state_dict):
         if "rotary_emb" in name:
             continue
 
+        if name.startswith("model."):
+            name = name[len("model."):]
+
+        name = name.replace("self_attn.", "attention.")
+        name = name.replace("input_layernorm.", "pre_layernorm.")
+        name = name.replace("post_attention_layernorm.", "post_layernorm.")
+
         mapped[name] = tensor
     return mapped
-

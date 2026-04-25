@@ -270,7 +270,7 @@ class LlamaForCausalLM(nn.Module):
         self.vocab_size = config.vocab_size
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size)
-        self.layers = nn.ModuleList([LlamaDecoderLayer(config, layer_idx)] 
+        self.layers = nn.ModuleList(LlamaDecoderLayer(config, layer_idx)
                                     for layer_idx in range(config.num_hidden_layers))
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)

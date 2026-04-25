@@ -61,16 +61,17 @@ def paged_decode_kernel(q_ptr,
         qk = tl.sum(q_vec[None, :] * k_block, axis=1) # matrix vector multiplication [1, 64] * [16, 64] = [16]
         qk *= SCALE
 
-        m_ij = tl.max(tl.where(mask, qk, -float("inf")), axis=0)
-        p = tl.exp(qk - tl.maximum(m_i, m_ij))
+        masked_qk = tl.where(mask, qk, -float("inf"))
+        m_ij = tl.max(masked_qk, axis=0)
+        m_new = tl.maximum(m_i, m_ij)
+        p = tl.exp(masked_qk - m_new)
+        alpha = tl.exp(m_i - m_new)
 
-        alpha = tl.exp(m_ij -tl.maximum(m_i, m_ij))
         acc = acc * alpha
         acc += tl.sum(p[:, None] * v_block, axis=0)
 
-
         l_i = l_i * alpha + tl.sum(p, axis=0)
-        m_i = tl.maximum(m_i, m_ij)
+        m_i = m_new
 
     acc = acc / l_i
     out_block_ptr = output_ptr + cur_batch * stride_ob + cur_head * stride_oh + offset_dim
@@ -85,7 +86,7 @@ class PagedFlashAttention(torch.autograd.Function):
             context_length):   # context length is a list [batch] the actual length of each sequences
          
          batch_size, num_heads, head_dim = query.shape
-         k_cache, v_cache = block_kv_cache.get_layer_cache(layer_idx)
+         k_cache, v_cache = block_kv_cache.get_layer_caches(layer_idx)
          output = torch.empty_like(query)
          grid = (batch_size, num_heads)
          

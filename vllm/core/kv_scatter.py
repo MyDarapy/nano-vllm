@@ -3,7 +3,6 @@ import torch
 import triton 
 import triton.language as tl
 
-from vllm.attention.flash_attention import TritonFlashAttention, DecodeFlashAttention
 from vllm.core.cache import BlockKCache
 
 """Load the K and V projections from contiguous memory, get the slot mapping for 

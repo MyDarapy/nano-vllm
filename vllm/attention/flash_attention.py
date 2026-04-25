@@ -112,7 +112,7 @@ def fwd_flash_attn_kernel(q_ptr, k_ptr, v_ptr, o_ptr, m_ptr, scale,
     qkv_offset = index_batch * qb_stride + index_head * qh_stride # i.e move from the first to the correct batch then move to the correct head within that batch 
     qkv_offset_K = index_batch * kb_stride + index_kv_head * kh_stride
     qkv_offset_V = index_batch * vb_stride + index_kv_head * vh_stride
-    qkv_offset_O = index_batch * ob_stride + index_kv_head * oh_stride
+    qkv_offset_O = index_batch * ob_stride + index_head * oh_stride
 
     off_q = block_index_q * BLOCK_SIZE_Q + tl.arange(0, BLOCK_SIZE_Q) # same as off_q (in this head what q block do we need to read )
     off_kv = tl.arange(0, BLOCK_SIZE_KV)
@@ -232,14 +232,6 @@ class TritonFlashAttention(torch.autograd.Function):
         #ctx.save_for_backward
     
         return O
-
-
-
-
-class DecodeFlashAttention(Q, K, V, causal):
-    pass
-
-
 
 
 def testing(BATCH_SIZE, NUM_HEADS, NUM_KV_HEADS, SEQ_LEN, HEAD_DIM, causal, dtype=torch.float16):

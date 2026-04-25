@@ -67,11 +67,10 @@ class LLMEngine:
         )
         self.config = self.model.config
         print(f"Model loaded: {self.config.num_hidden_layers} layers, {self.config.hidden_size} hidden_size")
-
         self.tokenizer = AutoTokenizer.from_pretrained(model_path)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
-
+        print(f"eos_token: {self.tokenizer.eos_token}")
         self.sampler = Sampler()
 
         if use_paged_attention:
@@ -135,7 +134,10 @@ class LLMEngine:
                     prompt,
                     max_tokens = 100,
                     priority = 0):
-        prompt_token_ids = self.tokenizer.encode(prompt)
+        messages = [{"role": "user", "content":prompt}]
+        prompt_token_ids = self.tokenizer.apply_chat_template(
+            messages, tokenize=True, add_generation_prompt=True, return_dict=False)
+        print(prompt_token_ids)
         if len(prompt_token_ids) >= self.max_seq_len:
             raise ValueError(f"Prompt length {len(prompt_token_ids)} exceeds max_seq_len {self.max_seq_len}")
         
@@ -452,6 +454,7 @@ class LLMEngine:
         )
         logits = self.model(input_ids, metadata, kv_cache=seq.kv_cache)
         next_token = self.sampler.greedy_decoding(logits)
+        print(f"next_token: {next_token.item()}")
         seq.num_prefilled_tokens = len(seq.prompt_token_ids)
         seq.append_token(next_token.item())
 

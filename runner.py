@@ -11,8 +11,8 @@ engine = LLMEngine(
     dtype = torch.float16,
     max_seq_len=2048,
     max_batch_size=8,
-    use_paged_attention=False,
-    use_flash_attn=False,
+    use_paged_attention=True,
+    use_flash_attn=True,
     scheduling_policy=SchedulingPolicy.PRIORITY,
 )
 

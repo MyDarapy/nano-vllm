@@ -121,12 +121,14 @@ def fwd_flash_attn_kernel(q_ptr, k_ptr, v_ptr, o_ptr, m_ptr, scale,
     # create blocks of pointers to get the address of where the index lives 
     Q_block_ptr = q_ptr + qkv_offset + off_q[:, None] * qn_stride + off_head[None, :] * qd_stride
     O_block_ptr = o_ptr + qkv_offset_O + off_q[:, None] * on_stride + off_head[None, :] * od_stride
+    q_mask_1d = off_q < SEQ_LEN
+    q_mask_2d = q_mask_1d[:, None] 
 
     m_i = tl.zeros((BLOCK_SIZE_Q,), dtype= tl.float32) - float("inf")
 
     l_i = tl.zeros((BLOCK_SIZE_Q,), dtype=tl.float32) + 1.0
     O_block = tl.zeros((BLOCK_SIZE_Q, HEAD_DIM), dtype=tl.float32)
-    Q_block = tl.load(Q_block_ptr) # add a mask
+    Q_block = tl.load(Q_block_ptr, mask=q_mask_2d, other=0.0) # add a mask
 
     # stage 1: Blocks before the diagonal 
     # stage 2: diagonal block itself 
@@ -191,8 +193,8 @@ def fwd_flash_attn_kernel(q_ptr, k_ptr, v_ptr, o_ptr, m_ptr, scale,
     m_i += tl.math.log(l_i)
     O_block = O_block / l_i[:, None]
     m_ptrs = m_ptr + index_batch_head * SEQ_LEN + off_q 
-    tl.store(m_ptrs, m_i)
-    tl.store(O_block_ptr, O_block.to(tl.float16))
+    tl.store(m_ptrs, m_i, mask=q_mask_1d)
+    tl.store(O_block_ptr, O_block.to(tl.float16), mask=q_mask_2d)
 
 
 # Host wrapper that prepares our inputs and parameters and runs the triton kernel

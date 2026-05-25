@@ -8,12 +8,12 @@ from vllm.config import ModelConfig
 from vllm.core.cache import BlockKCache, KVCache
 
 try:
-    from vllm.attention.flash_attention import TritonFlashAttention
+    from vllm.attention.paged_prefill import TritonFlashAttention
 except Exception:
     TritonFlashAttention = None
 
 try:
-    from vllm.attention.paged_attention import PagedFlashAttention
+    from vllm.attention.paged_decode import PagedFlashAttention
 except Exception:
     PagedFlashAttention = None
 

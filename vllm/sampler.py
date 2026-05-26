@@ -11,7 +11,7 @@ class Sampler:
         #logits.shape [batch_size, seq_len, vocab_size]
 
         last_logits = logits[:, -1, :]
-        next_tokens = torch.argmax(last_logits, dim=-1) [B, 1]
+        next_tokens = torch.argmax(last_logits, dim=-1) 
 
         return next_tokens
     

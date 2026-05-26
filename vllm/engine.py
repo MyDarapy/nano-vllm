@@ -70,7 +70,6 @@ class LLMEngine:
         self.tokenizer = AutoTokenizer.from_pretrained(model_path)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
-        print(f"eos_token: {self.tokenizer.eos_token}")
         self.sampler = Sampler()
 
         if use_paged_attention:
@@ -188,11 +187,12 @@ class LLMEngine:
         
         return completed_outputs
 
-    def _run_prefill(self, seq):
+    def _run_prefill(self, sequences):
         if self.use_paged_attention:
-            self._run_batched_paged_prefill(seq)
+            self._run_batched_paged_prefill(sequences)
         else:
-            self._run_prefill_legacy(seq)
+            for seq in sequences:
+                self._run_prefill_legacy(seq)
 
     def _run_prefill_paged(self, sequence): 
         """Per sequence prefill for simplicity but compute units sip juice"""
@@ -239,7 +239,7 @@ class LLMEngine:
         if not sequences:
             return 
         B = len(sequences)
-        prompt_lens = [seq.get_prpmpt_len() for seq in sequences]
+        prompt_lens = [seq.get_prompt_len() for seq in sequences]
         T = max(prompt_lens)
 
         for seq, seq_len in zip(sequences, prompt_lens):
@@ -257,7 +257,7 @@ class LLMEngine:
             positions[b, :seq_len] = torch.arange(0, seq_len, dtype=torch.long, device=self.device)
 
             slots = seq.block_table.slot_mapping_range(0, seq_len)
-            slot_mapping[b, :seq_len] = torch.tensor(slots, dtype=torch.long, device=self.device)
+            slot_mapping[b, :seq_len] = torch.tensor(slots, dtype=torch.int32, device=self.device)
 
         context_lens = torch.tensor(prompt_lens, dtype=torch.long, device=self.device)
 
@@ -455,32 +455,6 @@ class LLMEngine:
                 })
 
         return stats
-
-    def _run_batched_prefill_paged(self, sequences):
-        """"Batched prefill (offers better throughput and GPU compute unit usage)"""
-        """"Make GPU inference go brrrrrr"""
-        token_batches = []
-        seq_lens_list = []
-
-        # allocate blocks upfront and collect prompt tokens 
-        for seq in sequences:
-            prompt_len = seq.get_prompt_len()
-            num_blocks_needed = compute_blocks(prompt_len, self.block_size)
-
-            if seq.block_table is None:
-                seq.block_table = self.block_manager.allocate_blocks_for_sequence(num_blocks_needed)
-            token_batches.append(seq.prompt_token_ids)
-            seq_lens_list.append(prompt_len)
-
-            input_ids, seq_lens = input_padding(token_batches, 
-                                             pad_value=self.tokenizer.pad_token_id)
-
-            slot_mapping = seq.block_table
-
-            metadata = Metadata(
-                is_prefill= True,
-                block_tables=None,)
-        pass
 
     def _run_prefill_legacy(self, seq):
         if seq.kv_cache is None:

@@ -20,6 +20,9 @@ requests = [
      ("Explain continuous batching in simple terms.", 64, 1),
     ("What is paged attention?", 64, 5),
     ("Write a short poem about Lagos rain.", 48, 2),
+    ("How does flash attention work?", 64, 4),
+    ("What is the capital of France?", 16, 3),
+    ("What is the meaning of life?", 64, 10),
 ]
 
 for prompt, max_tokens, priority in requests:

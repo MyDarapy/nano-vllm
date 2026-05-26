@@ -199,7 +199,7 @@ class LlamaAttention(nn.Module):
                     raise RuntimeError(
                         "Flash attention dependencies are unavailable. Install triton to use paged prefill."
                     )
-                attn_output = self.flash_attention.flash_attention(q, k, v, causal=True)
+                attn_output = self.flash_attention.flash_attention(q, k, v, metadata.context_lens, causal=True)
             else:
                 q_step = q[:, :, -1, :]
                 attn_output = self.paged_attention.paged_decode_attn(

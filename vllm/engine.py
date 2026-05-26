@@ -230,6 +230,49 @@ class LLMEngine:
         next_token = self.sampler.greedy_decoding(logits)
         sequence.append_token(next_token.item())
 
+
+    def _run_batched_paged_prefill(self, sequences):
+        if not sequences:
+            return 
+        B = len(sequences)
+        prompt_lens = [seq.get_prpmpt_len() for seq in sequences]
+        T = max(prompt_lens)
+
+        for seq, seq_len in zip(sequences, prompt_lens):
+            if seq.block_table is None:
+                num_blocks_needed = compute_blocks(seq_len, self.block_size)
+                seq.block_table = self.block_manager.allocate_blocks_for_sequence(num_blocks_needed)
+
+        input_ids = torch.full((B, T), self.tokenizer.pad_token_id, dtype=torch.long, device=self.device)
+        positions = torch.zeros((B, T), dtype=torch.long, device=self.device)
+        slot_mapping = torch.full((B, T), -1, dtype=torch.int32, device=self.device)
+
+        for b, (seq, seq_len) in enumerate(zip(sequences, prompt_lens)):
+            tokens = seq.prompt_token_ids 
+            input_ids[b, :seq_len] = torch.tensor(tokens, dtype= torch.long, device=self.device)
+            positions[b, :seq_len] = torch.arange(0, seq_len, dtype=torch.long, device=self.device)
+
+            slots = seq.block_table.slot_mapping_range(0, seq_len)
+            slot_mapping[b, :seq_len] = torch.tensor(slots, dtype=torch.long, device=self.device)
+
+        context_lens = torch.tensor(prompt_lens, dtype=torch.long, device=self.device)
+
+        metadata = Metadata(
+            is_prefill=True,
+            block_tables=None,
+            context_lens=context_lens,
+            slot_mapping=slot_mapping,   # will be flattened inside store_kvcache via reshape(-1)
+            positions=positions,)
+        
+        logits = self.model(input_ids, metadata, kv_cache=self.block_kv_cache)
+        next_tokens = []
+        for b, seq_len in enumerate(prompt_lens):
+            last_logits = logits[b, seq_len-1, :]
+            next_tokens.append(int(torch.argmax(last_logits).item()))
+        
+        for seq, tok in zip(sequences, next_tokens):
+            seq.append_token(tok)
+
     def _run_chunked_prefill_paged(self, sequence, num_tokens):
         start_pos = sequence.num_prefilled_tokens
         end_pos = start_pos + num_tokens

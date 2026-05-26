@@ -26,7 +26,7 @@ def _attn_fwd_inner(
     v_ptr,
     qkv_offset_K: tl.constexpr,
     qkv_offset_V: tl.constexpr,
-    SEQ_LEN:tl.constexpr,
+    cur_len,
     HEAD_DIM: tl.constexpr):
     
 
@@ -36,14 +36,14 @@ def _attn_fwd_inner(
         lo, hi = block_index_q * BLOCK_SIZE_Q, (block_index_q + 1) * BLOCK_SIZE_Q
         lo = tl.multiple_of(lo, BLOCK_SIZE_Q)
     else: 
-        lo, hi = 0, SEQ_LEN 
+        lo, hi = 0, cur_len 
     for start_kv in range (lo, hi, BLOCK_SIZE_KV):
         kv_positions = start_kv + off_kv
         K_block_ptr = k_ptr + qkv_offset_K + off_head[:, None] * kd_stride + kv_positions[None, :] * kn_stride
         V_block_ptr = v_ptr + qkv_offset_V + kv_positions[:, None] * vn_stride + off_head[None, :] * vd_stride
 
-        mask_k = kv_positions[None, :] < SEQ_LEN
-        mask_v = kv_positions[:, None] < SEQ_LEN
+        mask_k = kv_positions[None, :] < cur_len
+        mask_v = kv_positions[:, None] < cur_len
 
         K_block = tl.load(K_block_ptr, mask=mask_k, other=0.0)
         V_block = tl.load(V_block_ptr, mask=mask_v, other=0.0)   
@@ -85,7 +85,7 @@ config = [triton.Config({"BLOCK_SIZE_Q": BLOCK_SIZE_Q, "BLOCK_SIZE_KV": BLOCK_SI
 
 
 @triton.jit
-def fwd_flash_attn_kernel(q_ptr, k_ptr, v_ptr, o_ptr, m_ptr, scale,
+def fwd_flash_attn_kernel(q_ptr, k_ptr, v_ptr, o_ptr, m_ptr, context_len_ptr, scale,
                           qb_stride, qh_stride, qn_stride, qd_stride,
                           kb_stride, kh_stride, kn_stride, kd_stride,
                           vb_stride, vh_stride, vn_stride, vd_stride,
@@ -108,6 +108,7 @@ def fwd_flash_attn_kernel(q_ptr, k_ptr, v_ptr, o_ptr, m_ptr, scale,
     queries_per_kv_head = NUM_HEADS // NUM_KV_HEADS
     index_kv_head = index_head // queries_per_kv_head
 
+    cur_len = tl.load(context_len_ptr + index_batch)
     # create offsets to get the index of sequences we are going to process
     qkv_offset = index_batch * qb_stride + index_head * qh_stride # i.e move from the first to the correct batch then move to the correct head within that batch 
     qkv_offset_K = index_batch * kb_stride + index_kv_head * kh_stride
@@ -121,7 +122,7 @@ def fwd_flash_attn_kernel(q_ptr, k_ptr, v_ptr, o_ptr, m_ptr, scale,
     # create blocks of pointers to get the address of where the index lives 
     Q_block_ptr = q_ptr + qkv_offset + off_q[:, None] * qn_stride + off_head[None, :] * qd_stride
     O_block_ptr = o_ptr + qkv_offset_O + off_q[:, None] * on_stride + off_head[None, :] * od_stride
-    q_mask_1d = off_q < SEQ_LEN
+    q_mask_1d = off_q < cur_len
     q_mask_2d = q_mask_1d[:, None] 
 
     m_i = tl.zeros((BLOCK_SIZE_Q,), dtype= tl.float32) - float("inf")
@@ -200,7 +201,7 @@ def fwd_flash_attn_kernel(q_ptr, k_ptr, v_ptr, o_ptr, m_ptr, scale,
 # Host wrapper that prepares our inputs and parameters and runs the triton kernel
 class TritonFlashAttention(torch.autograd.Function):
     @staticmethod
-    def flash_attention(Q, K, V, causal):
+    def flash_attention(Q, K, V, context_lens, causal):
         assert Q.is_cuda
         assert K.is_cuda
         assert V.is_cuda
@@ -225,7 +226,7 @@ class TritonFlashAttention(torch.autograd.Function):
         M = torch.empty((B, Hq, Lq), device=Q.device, dtype=torch.float32)
 
         scaling_factor = 1 / math.sqrt(D)
-        fwd_flash_attn_kernel[grid](Q, K, V, O, M, scaling_factor,
+        fwd_flash_attn_kernel[grid](Q, K, V, O, M, context_lens, scaling_factor,
                                     Q.stride(0), Q.stride(1), Q.stride(2), Q.stride(3),
                                     K.stride(0), K.stride(1), K.stride(2), K.stride(3),
                                     V.stride(0), V.stride(1), V.stride(2), V.stride(3),

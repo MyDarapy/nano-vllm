@@ -161,10 +161,14 @@ class LLMEngine:
         
         # process full sequence one at a time for simplicity
         # TODO: parallelize prefill across a batch. currently highly inefficient with the for loop
-        for seq in scheduler_outputs.prefill_sequences:
-            self._run_prefill(seq) # (runs batch_size amount of forward pass(inefficient, parallelize later))
+        """for seq in scheduler_outputs.prefill_sequences:
+            self._run_prefill(seq) # (runs batch_size amount of forward pass(inefficient, parallelize later)) (DONE!)"""
+        
+        # process batched prefill sequences 
+        if scheduler_outputs.prefill_sequences:
+            self._run_prefill(scheduler_outputs.prefill_sequences)
 
-        # proces batched decode sequences
+        # process batched decode sequences
         if scheduler_outputs.decode_sequences:
             self.run_decode(scheduler_outputs.decode_sequences)
         
@@ -186,7 +190,7 @@ class LLMEngine:
 
     def _run_prefill(self, seq):
         if self.use_paged_attention:
-            self._run_prefill_paged(seq)
+            self._run_batched_paged_prefill(seq)
         else:
             self._run_prefill_legacy(seq)
 

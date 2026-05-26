@@ -160,7 +160,7 @@ def fwd_flash_attn_kernel(q_ptr, k_ptr, v_ptr, o_ptr, m_ptr, context_len_ptr, sc
             v_ptr,
             qkv_offset_K,
             qkv_offset_V,
-            SEQ_LEN, 
+            cur_len, 
             HEAD_DIM
         )
     
@@ -187,7 +187,7 @@ def fwd_flash_attn_kernel(q_ptr, k_ptr, v_ptr, o_ptr, m_ptr, context_len_ptr, sc
             v_ptr,
             qkv_offset_K,
             qkv_offset_V,
-            SEQ_LEN, 
+            cur_len, 
             HEAD_DIM
         )
 

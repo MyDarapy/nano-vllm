@@ -214,9 +214,9 @@ class TritonFlashAttention(torch.autograd.Function):
         # create the output buffer
         O = torch.empty_like(Q)
 
-        # we set block_sizes manually for now. We will autotune this later
-        #BLOCK_SIZE_Q = 128
-        #BLOCK_SIZE_KV = 32
+        #we set block_sizes manually for now. We will autotune this later
+        BLOCK_SIZE_Q = 128
+        BLOCK_SIZE_KV = 32
 
         
         stage = 3 if causal else 1

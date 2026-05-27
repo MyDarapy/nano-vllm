@@ -1,14 +1,3 @@
-#!/usr/bin/env python3
-"""
-Subprocess runner for this repo's engine (`vllm.engine.LLMEngine`).
-
-This is intended to be invoked by `benchmarks/compare_official_vllm.py` using
-the nano env Python interpreter.
-
-It prints a single JSON object as the last line of stdout:
-  {"time_s": float, "output_tokens": int}
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -41,8 +30,6 @@ def main() -> None:
     ap.add_argument("--use-flash-attn", action="store_true", default=True)
     ap.add_argument("--no-use-flash-attn", dest="use_flash_attn", action="store_false")
     ap.add_argument("--warmup-steps", type=int, default=1)
-    ap.add_argument("--ignore-eos", action="store_true", default=True)
-    ap.add_argument("--no-ignore-eos", dest="ignore_eos", action="store_false")
     args = ap.parse_args()
 
     _ensure_repo_root_on_path()
@@ -67,37 +54,30 @@ def main() -> None:
         scheduling_policy=SchedulingPolicy.PRIORITY,
     )
 
-    if args.ignore_eos:
-        # Match vLLM's `ignore_eos=True` benchmark behavior: only stop on max_tokens.
-        engine.tokenizer.eos_token_id = -1
-
-    if args.device.startswith("cuda") and torch.cuda.is_available():
-        torch.cuda.synchronize()
-
     with open(args.workload_json, "r", encoding="utf-8") as f:
         payload = json.load(f)
     prompt_token_ids = payload["prompt_token_ids"]
     max_tokens_list = payload["max_tokens_list"]
 
     # Warmup: trigger compilation/autotune.
+    warmup_prompt_len = max((len(p) for p in prompt_token_ids), default=4)
+    warmup_ids = [1] * warmup_prompt_len
     for _ in range(args.warmup_steps):
-        engine.scheduler.add_request([1, 2, 3, 4], max_tokens=4, priority=0)
+        engine.scheduler.add_request(warmup_ids, max_tokens=1, priority=0)
     while engine.scheduler.has_pending_requests():
-        if args.device.startswith("cuda") and torch.cuda.is_available():
-            torch.cuda.synchronize()
         engine.step()
-        if args.device.startswith("cuda") and torch.cuda.is_available():
-            torch.cuda.synchronize()
+    if args.device.startswith("cuda") and torch.cuda.is_available():
+        torch.cuda.synchronize()
 
+    if args.device.startswith("cuda") and torch.cuda.is_available():
+        torch.cuda.synchronize()
     t0 = time.time()
     for ids, mx in zip(prompt_token_ids, max_tokens_list):
         engine.scheduler.add_request(ids, max_tokens=mx, priority=0)
     while engine.scheduler.has_pending_requests():
-        if args.device.startswith("cuda") and torch.cuda.is_available():
-            torch.cuda.synchronize()
         engine.step()
-        if args.device.startswith("cuda") and torch.cuda.is_available():
-            torch.cuda.synchronize()
+    if args.device.startswith("cuda") and torch.cuda.is_available():
+        torch.cuda.synchronize()
     t = time.time() - t0
 
     total_requested = int(sum(max_tokens_list))

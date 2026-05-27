@@ -1,27 +1,3 @@
-#!/usr/bin/env python3
-"""
-Compare throughput between:
-  1) This repo's engine (`vllm.engine.LLMEngine`)  [nano-vLLM]
-  2) Official vLLM (`vllm.LLM`)                     [vLLM]
-
-Why subprocesses?
-  - This repo's package name is `vllm/`, which conflicts with the official `vllm`
-    PyPI package. Running each benchmark in its own virtualenv + subprocess avoids
-    import shadowing and keeps dependencies clean.
-
-You need two Python envs:
-  - nano env: has this repo on PYTHONPATH and installs `requirements.txt`
-  - vllm env: has official `vllm` installed (plus torch/cuda etc.)
-
-Example:
-  python3 benchmarks/compare_official_vllm.py \\
-    --model ~/huggingface/Qwen3-0.6B \\
-    --nano-python .venv-nano/bin/python \\
-    --vllm-python .venv-vllm/bin/python \\
-    --num-seqs 256 --min-input-len 100 --max-input-len 1024 \\
-    --min-output-len 100 --max-output-len 1024 --max-model-len 4096
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -141,6 +117,13 @@ def main() -> None:
     ap.add_argument("--no-use-flash-attn", dest="use_flash_attn", action="store_false")
     ap.add_argument("--enable-prefix-caching", action="store_true", default=True)
     ap.add_argument("--no-enable-prefix-caching", dest="enable_prefix_caching", action="store_false")
+    ap.add_argument(
+        "--include-nano-legacy",
+        action="store_true",
+        default=True,
+        help="Also benchmark nano-vLLM legacy (non-paged) path using the same workload.",
+    )
+    ap.add_argument("--no-include-nano-legacy", dest="include_nano_legacy", action="store_false")
     args = ap.parse_args()
 
     seed(args.seed)
@@ -206,6 +189,12 @@ def main() -> None:
         if not args.enable_prefix_caching:
             nano_argv.append("--no-enable-prefix-caching")
 
+        nano_legacy_argv = None
+        if args.include_nano_legacy:
+            nano_legacy_argv = list(nano_argv)
+            if "--no-use-paged" not in nano_legacy_argv:
+                nano_legacy_argv.append("--no-use-paged")
+
         vllm_argv = [
             args.vllm_python,
             vllm_runner,
@@ -221,12 +210,23 @@ def main() -> None:
         ]
 
         nano_out = _run_subprocess_json(args.nano_python, nano_argv, nano_env)
+        nano_legacy_out = None
+        if nano_legacy_argv is not None:
+            nano_legacy_out = _run_subprocess_json(args.nano_python, nano_legacy_argv, nano_env)
         vllm_out = _run_subprocess_json(args.vllm_python, vllm_argv, vllm_env)
 
         results = [
             Result("vLLM", int(vllm_out["output_tokens"]), float(vllm_out["time_s"])),
-            Result("Nano-vLLM", int(nano_out["output_tokens"]), float(nano_out["time_s"])),
+            Result("Nano-vLLM (paged)", int(nano_out["output_tokens"]), float(nano_out["time_s"])),
         ]
+        if nano_legacy_out is not None:
+            results.append(
+                Result(
+                    "Nano-vLLM (legacy)",
+                    int(nano_legacy_out["output_tokens"]),
+                    float(nano_legacy_out["time_s"]),
+                )
+            )
         _print_table(results)
 
 

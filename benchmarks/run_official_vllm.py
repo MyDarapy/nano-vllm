@@ -1,14 +1,3 @@
-#!/usr/bin/env python3
-"""
-Subprocess runner for the official `vllm` PyPI package.
-
-This is intended to be invoked by `benchmarks/compare_official_vllm.py` using
-the vLLM env Python interpreter.
-
-It prints a single JSON object as the last line of stdout:
-  {"time_s": float, "output_tokens": int}
-"""
-
 from __future__ import annotations
 
 import argparse

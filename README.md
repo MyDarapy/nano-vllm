@@ -54,7 +54,9 @@ python3 benchmarks/compare_official_vllm.py \
   --min-output-len 5 --max-output-len 20 --max-model-len 128 \
   --max-batch-size 5 --max-prefill-tokens 256
 ```
-
+Benchmark Configurations
+- Hardware: RTX 4000 Ada (20GB)
+- Model: TinyLlama-1.1B-Chat-v1.0
 
 ## Performance Results
 
@@ -89,11 +91,6 @@ python3 benchmarks/compare_official_vllm.py \
   </tbody>
 </table>
 
-| Inference Engine | Output Tokens | Time (s) | Throughput (tokens/s) |
-|---|---:|---:|---:|
-| vLLM | 73 | 0.17 | 440.45 |
-| Nano-vLLM (paged) | 73 | 0.39 | 188.80 |
-| Nano-vLLM (legacy) | 73 | 1.21 | 60.08 |
 
 ## Docs
 

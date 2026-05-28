@@ -26,7 +26,6 @@ Nano-vLLM exists to show how an inference engine can do better:
 - separate prefill and decode execution paths tuned for their very different workloads
 - a simple scheduler that can admit, batch, preempt, and retire requests dynamically
 
-It is a teaching project, but it is also a real engine with a clean execution model and a clear systems story.
 
 ## Key Features
 
@@ -38,8 +37,7 @@ It is a teaching project, but it is also a real engine with a clean execution mo
 - Optional priority-based scheduling with preemption
 - Legacy per-sequence KV cache mode for debugging and comparison
 - Llama-style model implementation from scratch
-- Hugging Face config and safetensors loading
-- Greedy decoding out of the box, with a sampler abstraction ready for extension
+
 
 ## What Nano-vLLM Implements
 
@@ -72,8 +70,8 @@ The project is organized around a small set of engine and memory-management prim
 ```text
 vllm/
 ├── attention/
-│   ├── flash_attention.py      # FlashAttention-style prefill kernel
-│   └── paged_attention.py      # Paged decode attention kernel
+│   ├── paged_decode.py      # FlashAttention-style prefill kernel
+│   └── paged_prefill.py      # Paged decode attention kernel
 ├── core/
 │   ├── block.py                # Block and BlockTable abstractions
 │   ├── block_manager.py        # KV block allocation, freeing, prefix cache
@@ -81,13 +79,8 @@ vllm/
 │   ├── kv_scatter.py           # Scatter new K/V states into block cache
 │   ├── scheduler.py            # Continuous batching and preemption logic
 │   └── sequence.py             # Per-request state tracking
-├── layers/
-│   ├── activations.py
-│   ├── rmsnorm.py
-│   └── rope.py
 ├── models/
 │   ├── llama.py                # Llama model implementation
-│   └── moe.py
 ├── config.py                   # Model and attention metadata
 ├── engine.py                   # Main inference engine
 ├── loader.py                   # HF config + safetensors loading
@@ -184,32 +177,6 @@ The attention module is also where the runtime backend switches happen:
 
 - in paged mode, K/V states are scattered into the global block cache and decode reads through paged attention
 - in legacy mode, each sequence updates its own contiguous cache and attention runs against that cache directly
-
-## Installation
-
-Clone the repository and install the runtime dependencies:
-
-```bash
-git clone <your-repo-url>
-cd vllm
-pip install -r requirements.txt
-```
-
-The current dependency set is intentionally small:
-
-- `torch`
-- `transformers`
-- `huggingface_hub`
-- `safetensors`
-- `triton`
-
-For the paged-attention path, you will typically want:
-
-- a CUDA-capable GPU
-- a compatible PyTorch installation
-- Triton available in your environment
-
-If you just want to validate model logic or compare behavior, the legacy KV-cache path is the simplest starting point.
 
 ## Model Weights
 
@@ -410,5 +377,4 @@ This project is heavily inspired by the ideas popularized by:
 - [vLLM](https://github.com/vllm-project/vllm)
 - the PagedAttention paper and related engineering writeups
 - FlashAttention-style efficient attention kernels
-- the growing ecosystem of educational inference-engine rebuilds
 

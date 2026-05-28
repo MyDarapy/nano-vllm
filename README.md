@@ -4,11 +4,13 @@ A lightweight vLLM-inspired inference engine built from scratch.
 
 ## Key Features
  
-- 🧠 **Paged KV cache**: memory efficient KV cache management
-- 🚀 **Continuous batching**: process multiple requests simulatenously with iteration-level scheduling
-- 🧩 **Prefix caching**: reuse shared full-prefix blocks across requests
-- ⚡ **FlashAttention Triton kernels**: fused attention kernels for paged prefill and paged decode 
-- 🧪 **Legacy mode**: contiguous per-sequence KV cache for debugging and comparison
+- 🧠 **Paged KV cache**: Memory efficient KV cache management. Zero memory waste. No per request cache preallocation. KV cache allocated on-demand
+- 🚀 **Continuous batching**: process multiple requests simulatenously with iteration-level scheduling. New requests can join a batch and completed requests can leave at any time.
+- 🧩 **Prefix caching**: Shared KV cache blocks for common prefixes
+- 🚀 **Chunked Prefill**: Break long prompts into manageable chunks
+- ⚡ **FlashAttention Triton kernels**: Fused IO aware attention kernels for faster computation
+- 🧪 **Grouped Query Attention (GQA)**: Efficient attention with shared KV heads
+- 🧪 **Legacy mode**: contiguous per-sequence KV cache implementation for debugging and comparison
 
 ## Installation
 
@@ -34,7 +36,7 @@ engine = LLMEngine(
     use_paged_attention=True,
 )
 
-print(engine.generate("Hello from Nano-vLLM!", max_tokens=64))
+print(engine.generate("Write me a short poem about Lagos traffic", max_tokens=64))
 ```
 
 ## Benchmark (Nano-vLLM vs official vLLM)

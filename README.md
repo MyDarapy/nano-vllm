@@ -105,5 +105,6 @@ Contributions are welcome. Nano‑vLLM started as an educational project, but th
 - Add support for more architectures beyond Llama-style models (e.g., Qwen, Kimi, etc.).
 - Fix chunked prefill so attention can correctly attend to the full prefix (not just the current chunk).
 - Implement support for topk sampling and nucleus sampling
+-Add support for speculative decoding 
 
 

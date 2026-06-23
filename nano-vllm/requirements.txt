@@ -1,0 +1,5 @@
+torch 
+huggingface_hub 
+transformers==4.45.2 
+triton
+safetensors

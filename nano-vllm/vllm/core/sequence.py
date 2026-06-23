@@ -1,0 +1,106 @@
+from enum import Enum
+import time
+from typing import List, Optional
+from dataclasses import dataclass, field
+
+from vllm.core.cache import KVCache
+from vllm.core.block import BlockTable, compute_blocks
+
+
+class SequenceStatus(Enum):
+    WAITING = "waiting"
+    RUNNING = "running"
+    SWAPPED = "swapped"
+    FINISHED = "finished"
+
+@dataclass
+class Sequence:
+    seq_id: int
+    prompt_token_ids: List[int]
+    max_tokens : int
+
+    output_token_ids: List[int] = field(default_factory=list)
+    status: SequenceStatus = SequenceStatus.WAITING
+
+    # becomes initalized when status bcomes RUNNING. This is for the normal inefficient KV caching
+    kv_cache: Optional[KVCache] = None
+
+    # maps logical blocks to physical blocks
+    block_table: Optional[BlockTable] = None
+
+    priority: int = 0 
+    arrival_time: float = field(default_factory=time.time)
+
+    num_prefilled_tokens: int = 0
+
+    # number of tokens using shared blocks
+    shared_prefix_len: int = 0
+
+    def get_len(self):
+        """Get the total len of the sequence both prompt tokens and the generated tokens"""
+        return len(self.prompt_token_ids) + len(self.output_token_ids)
+    
+    def get_prompt_len(self):
+        return len(self.prompt_token_ids)
+    
+    def get_output_len(self):
+        return len(self.output_token_ids)
+    
+    def get_token_ids(self):
+        return self.prompt_token_ids + self.output_token_ids
+    
+    def get_last_token_id(self):
+        """Get the last token id for the next decode step"""
+        if self.output_token_ids:
+            return self.output_token_ids[-1]
+        return self.prompt_token_ids[-1]
+    
+    def append_token(self, token_id):
+        """"Append a generated token to the output"""
+        self.output_token_ids.append(token_id)
+
+    def is_finished(self, eos_token_id):
+        if self.get_output_len() >= self.max_tokens:
+            return True
+        if self.output_token_ids and self.output_token_ids[-1] == eos_token_id:
+            return True
+        return False 
+    
+    def is_prefill(self):
+        return len(self.output_token_ids) == 0 
+
+    def is_chunked_prefill(self):
+        return self.num_prefilled_tokens > 0 and self.num_prefilled_tokens < len(self.prompt_token_ids)
+    
+    def get_remaining_prefill_tokens(self):
+        return len(self.prompt_token_ids) - self.num_prefilled_tokens
+    
+    def get_next_chunk_token(self, chunk_size):
+        start = self.num_prefilled_tokens
+        end = min(start + chunk_size, len(self.prompt_token_ids))
+        return self.prompt_token_ids[start:end]
+    
+    def reset_for_recompute(self):
+        self.output_token_ids = []
+        self.num_prefilled_tokens = 0
+        self.status = SequenceStatus.WAITING
+        self.block_table = None
+        self.kv_cache = None
+
+    def get_num_blocks_needed(self, block_size):
+        return compute_blocks(self.get_len(), block_size)
+    
+
+    def get_num_new_blocks_needed(self, block_size):
+        blocks_needed = self.get_num_blocks_needed(block_size)
+        blocks_allocated = self.block_table.num_blocks() if self.block_table else 0
+        return max(0, blocks_needed-blocks_allocated)
+    
+    def __repr__(self):
+        return(
+            f"Sequence(id={self.seq_id}, "
+            f"prompt_len={self.get_prompt_len()}, "
+            f"output_len={self.get_output_len()}, "
+            f"status={self.status.value}, "
+            f"priority={self.priority})"
+        ) 

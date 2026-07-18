@@ -296,7 +296,7 @@ class LLMEngine:
                 sequence.block_table.append_block(block_id)
 
         input_ids = torch.tensor([chunk_tokens], dtype=torch.long, device=self.device)
-        context_lens = torch.tensor([end_pos], dtype=torch.long, device=self.device)
+        context_lens = torch.tensor([len(chunk_tokens)], dtype=torch.long, device=self.device)
         slot_mapping = sequence.block_table.slot_mapping_range(start_pos, end_pos)
         positions = self._build_positions(start_pos, len(chunk_tokens))
 
@@ -475,7 +475,6 @@ class LLMEngine:
         )
         logits = self.model(input_ids, metadata, kv_cache=seq.kv_cache)
         next_token = self.sampler.greedy_decoding(logits)
-        print(f"next_token: {next_token.item()}")
         seq.num_prefilled_tokens = len(seq.prompt_token_ids)
         seq.append_token(next_token.item())
 

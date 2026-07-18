@@ -160,6 +160,8 @@ class Scheduler:
 
         for seq in self.running:
             if seq.is_chunked_prefill():
+                if self.block_manager is None:
+                    raise RuntimeError("Legacy mode does not support chunked prefill sequences")
                 remaining = seq.get_remaining_prefill_tokens()
                 tokens_to_process = min(prefill_budget, remaining)
                 if tokens_to_process > 0:
@@ -201,6 +203,11 @@ class Scheduler:
                 prefill_budget -= prompt_len
 
             else:
+                if self.block_manager is None:
+                    self.running.remove(seq)
+                    seq.status = SequenceStatus.WAITING
+                    self._push_waiting(seq)
+                    break
                 tokens_to_process = prefill_budget
                 outputs.chunked_prefill_sequences.append(seq)
                 outputs.chunked_prefill_tokens.append(tokens_to_process)

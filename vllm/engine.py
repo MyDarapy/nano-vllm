@@ -154,9 +154,12 @@ class LLMEngine:
         completed_outputs = []
         # process chunked prefill sequences 
         # TODO: this can definitely be paralized with batching to take advantage of the GPUs compute unit 
-        for i, seq in enumerate(scheduler_outputs.chunked_prefill_sequences):
-            num_tokens = scheduler_outputs.chunked_prefill_tokens[i]
-            self._run_chunked_prefill_paged(seq, num_tokens)
+        if scheduler_outputs.chunked_prefill_sequences:
+            if not self.use_paged_attention:
+                raise RuntimeError("Legacy mode does not support chunked prefill")
+            for i, seq in enumerate(scheduler_outputs.chunked_prefill_sequences):
+                num_tokens = scheduler_outputs.chunked_prefill_tokens[i]
+                self._run_chunked_prefill_paged(seq, num_tokens)
         
         # process full sequence one at a time for simplicity
         # TODO: parallelize prefill across a batch. currently highly inefficient with the for loop

@@ -227,37 +227,32 @@ class LlamaAttention(nn.Module):
         return self.o_proj(attn_output.view(batch_size, seq_len, -1))
 
 
-
-class LLamaMLP(nn.Module):
+class LlamaMLP(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.hidden_dim = config.hidden_size
-        self.intermidate_size = config.intermidate_size
+        self.intermidate_size = config.intermidiate_size
 
         self.fused_mlp = MLP() if MLP is not None else None
-        
-        self.w_gate =  nn.Parameter(torch.empty(self.hidden_dim, self.intermidate_size))
-        self.w_up = nn.Parameter(torch.empty(self.hidden_dim, self.intermidate_size))
-        self.w_down = nn.Parameter(torch.empty(self.intermidate_size, self.hidden_dim)) 
 
-        nn.init.normal_(self.we_up, std=0.02)
-        nn.init.normal_(self.w_gate, std=0.02)
-        nn.init.normal_(self.w_down, std=0.02)
-
-        self.gate_proj = nn.Linear(self.hidden_dim, self.intermidate_size, bias=False)   
+        self.gate_proj = nn.Linear(self.hidden_dim, self.intermidate_size, bias=False)
         self.up_proj = nn.Linear(self.hidden_dim, self.intermidate_size, bias=False)
         self.down_proj = nn.Linear(self.intermidate_size, self.hidden_dim, bias=False)
 
     def forward(self, x):
-        if self.fused_mlp:
-            hidden = MLP.ffn_stage_1(x, w_gate=self.w_gate, w_up=self.w_up)
-            output = MLP.ffn_stage_2(x, w_down=self.w_down)
-        else: 
-            gate = F.silu(self.gate_proj(x))
-            up = self.up_proj(x)
-            output = self.down_proj(gate * up)
-        return output
+        if self.fused_mlp is not None:
+            w_gate = self.gate_proj.weight.t().contiguous()
+            w_up = self.up_proj.weight.t().contiguous()
+            w_down = self.down_proj.weight.t().contiguous()
 
+            hidden = self.fused_mlp.ffn_stage_1(x, w_gate=w_gate, w_up=w_up)
+            output = self.down_proj(hidden)
+            #output = self.fused_mlp.ffn_stage_2(hidden, w_down=w_down)
+            return output
+
+        gate = F.silu(self.gate_proj(x))
+        up = self.up_proj(x)
+        return self.down_proj(gate * up)
 
 class LlamaMLPVanilla(nn.Module):
     def __init__(self, config: ModelConfig):
@@ -283,7 +278,7 @@ class LlamaDecoderLayer(nn.Module):
 
     def __init__(self, config, layer_idx):
         super().__init__()
-        self.mlp = LlamaMLP(config)
+        self.mlp = LlamaMLPVanilla(config)
         self.attention = LlamaAttention(config, layer_idx)
         self.pre_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
